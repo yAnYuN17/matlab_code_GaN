@@ -1,0 +1,764 @@
+======================================================================
+FILE: LaserMOD_Tutorial_Berkeley.pdf | pages: 15
+======================================================================
+--- p1 ---
+Erwin Lau 
+Erwin Lau 1
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+LaserMOD Tutorial
+EE232
+Erwin K. Lau
+9/26/2006
+--- p2 ---
+Erwin Lau 
+Erwin Lau 2
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+Outline
+• Introduction to LaserMOD
+• Walk-through of basic laser structure simulation
+• Notes to look out for when using the program
+• Simulation verification charts
+• Useful formulas
+--- p3 ---
+Erwin Lau 
+Erwin Lau 3
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+Simulation Overview
+1) Build laser structure
+a) Draw structure
+b) Refine mesh
+2) Set bias conditions (steady state or transient)
+3) Simulate Index/Doping profiles
+4) Calculate Gain
+a) Allows access to “peak gain” curve and other gain data
+5) Simulate Laser
+a) Simulating a transient condition allows access to “frequency 
+response” curve
+6) Generate additional plots (be sure to verify “Plot Data for Bias #”)
+a) Standard plots
+b) Data vs. Bias (custom plots)
+c) Spatial Data (custom plots)
+--- p4 ---
+Erwin Lau 
+Erwin Lau 4
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+LaserMOD
+These are 
+the laser 
+building 
+tools
+--- p5 ---
+Erwin Lau 
+Erwin Lau 5
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+LaserMOD
+Global settings
+Edit symbols
+Edit bias points
+Edit material 
+parameters
+--- p6 ---
+Erwin Lau 
+Erwin Lau 6
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+LaserMOD
+These are 
+the execute 
+simulation 
+tools
+--- p7 ---
+Erwin Lau 
+Erwin Lau 7
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+Notes on Tutorial
+1) Follow the tutorial in Chapter 4 of the User’s Guide.
+2) In the material parameter file for AlGaAs, kpmat_DIELOPT
+should be set to Diel_Opt0. This affects the index profile.
+3) Frequency response must be run after a successful 
+impulse response using the transient bias feature. The 
+impulse response should show the impulse returning to 
+steady-state (as shown in tutorial).
+4) Power output for L-I-V curves are for both facets total.
+5) In transient, 1st number is time step, 2nd number is # of 
+steps. Make sure all time steps in all transient steps are the 
+same value.
+6) Variables are case-sensitive
+--- p8 ---
+Erwin Lau 
+Erwin Lau 8
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+Notes (continued)
+7) If you see multiple lines when viewing graphs with WinPlot, 
+they are lines from previous simulations. To clear the old 
+plots, delete the two directories formed in the same 
+directory as the saved .las structure file and run the 
+simulation over.
+8) Sheet carrier density (cm-2) = Carrier density (cm-3) x total 
+quantum well thickness (cm)
+--- p9 ---
+Erwin Lau 
+Erwin Lau 9
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+Where to find things
+• Simulation parameters can be found in several places:
+– Bias Table (I, V)
+– Global Settings (L, T, αi, R)
+– Symbol Table (w)
+– Right-clicking on different laser sections (doping, 
+ternary/quaternary element concentrations, w, d)
+• Derived parameters can be found in a few graphs:
+– Gain Calculation (g)
+– Simulate Laser output graph (g(v,N), L(I), V(I), transient)
+– Generate Plot output, standard plots (N, IV, LI, freq. resp., etc.)
+– Generate Plot output, custom plots (las. freq., Γ, neff, etc.)
+--- p10 ---
+Erwin Lau 
+Erwin Lau 10
+10
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+Deviation from Tutorial
+• The manual and program deviate when trying to simulate the 
+IV characteristics, due to updated material files (and a non-
+updated manual).  If the LIV doesn’t look right, add bias 
+conditions near threshold, between 1.4V and 25mA. (maybe 
+1mA and 2mA as shown below.
+--- p11 ---
+Erwin Lau 
+Erwin Lau 11
+11
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+L-I-V  and Transient Response with new bias 
+points
+•
+L-I-V curves should look like this:
+•
+Transient response should look 
+like this:
+--- p12 ---
+Erwin Lau 
+Erwin Lau 12
+12
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+Charts (cont’d) with new bias points
+•
+Frequency response should look 
+like this:
+•
+You can derive differential gain 
+and transparency carrier density 
+from the Peak Gain curve
+a
+Ntr
+--- p13 ---
+Erwin Lau 
+Erwin Lau 13
+13
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+Numerical Conditions
+•
+After the tutorial is completed, you should be able to extract several 
+parameters (this is an exercise):
+cm-1
+-
+Å
+μm
+μm
+-
+eV
+cm-1
+%
+cm2
+cm-3
+cm-3
+V
+W/A
+mA
+Unit
+equation
+simulation parameter
+simulation parameter
+simulation parameter
+simulation parameter
+eff. Index curve
+lasing frequency curve
+reflectivity value + equation
+confinement curve
+peak gain curve
+electron/hole density curve (above 
+threshold)
+peak gain curve
+LIV curve
+equation
+peak gain curve
+Extracted from…
+1330
+gth
+Threshold gain
+0.37
+R
+Mirror reflectivity
+80
+d
+Quantum well thickness
+2
+w
+Cavity width
+500
+L
+Cavity length
+3.09
+neff
+Effective index
+1.24
+ν
+Lasing frequency
+20
+αm
+Distributed mirror loss
+1.88
+Γ
+Confinement factor
+1.6x10-15
+a
+Differential gain
+~3x1018
+1.31x1018
+1.42
+0.8
+1
+Approx. Value
+Nth
+Ntr
+Vth
+ηd
+Ith
+Sym.
+Threshold carrier density
+Transparency carrier density 
+Threshold voltage
+Differential quantum efficiency
+Threshold current
+Parameter
+--- p14 ---
+Erwin Lau 
+Erwin Lau 14
+14
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+Useful Formulas
+• Output power
+• Mirror loss
+• Threshold gain 
+• Threshold current
+• Differential quantum 
+efficiency
+(
+)
+th
+i
+m
+m
+i
+I
+I
+q
+h
+P
+−
+⎟⎟
+⎠
+⎞
+⎜⎜
+⎝
+⎛
++
+=
+ν
+α
+α
+α
+η
+0
+⎟
+⎠
+⎞
+⎜
+⎝
+⎛
+=
+R
+L
+m
+1
+ln
+1
+α
+m
+i
+th
+g
+α
+α +
+=
+Γ
+⎟⎟
+⎠
+⎞
+⎜⎜
+⎝
+⎛
+=
+n
+th
+i
+th
+N
+qV
+I
+τ
+η
+(Assume internal quantum efficiency, ηi=1)
+d
+w
+L
+V
+⋅
+⋅
+=
+(volume)
+⎟⎟
+⎠
+⎞
+⎜⎜
+⎝
+⎛
+⎟⎟
+⎠
+⎞
+⎜⎜
+⎝
+⎛
++
+=
+q
+h
+i
+m
+m
+d
+ν
+α
+α
+α
+η
+(unitless if without hv/q)
+(See Coldren/Corzine, Chapter 2)
+--- p15 ---
+Erwin Lau 
+Erwin Lau 15
+15
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+Things to try
+• Obtain the frequency response at a lower bias (I=3 mA) 
+(should be around 2-3 GHz)
+• Reduce laser length (L) and see threshold and ηd increase
+======================================================================
+FILE: lasermod_outline_Berkeley.pdf | pages: 15
+======================================================================
+--- p1 ---
+Erwin Lau 
+Erwin Lau 1
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+LaserMOD Tutorial
+EE232
+Erwin K. Lau
+9/26/2006
+--- p2 ---
+Erwin Lau 
+Erwin Lau 2
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+Outline
+• Introduction to LaserMOD
+• Walk-through of basic laser structure simulation
+• Notes to look out for when using the program
+• Simulation verification charts
+• Useful formulas
+--- p3 ---
+Erwin Lau 
+Erwin Lau 3
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+Simulation Overview
+1) Build laser structure
+a) Draw structure
+b) Refine mesh
+2) Set bias conditions (steady state or transient)
+3) Simulate Index/Doping profiles
+4) Calculate Gain
+a) Allows access to “peak gain” curve and other gain data
+5) Simulate Laser
+a) Simulating a transient condition allows access to “frequency 
+response” curve
+6) Generate additional plots (be sure to verify “Plot Data for Bias #”)
+a) Standard plots
+b) Data vs. Bias (custom plots)
+c) Spatial Data (custom plots)
+--- p4 ---
+Erwin Lau 
+Erwin Lau 4
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+LaserMOD
+These are 
+the laser 
+building 
+tools
+--- p5 ---
+Erwin Lau 
+Erwin Lau 5
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+LaserMOD
+Global settings
+Edit symbols
+Edit bias points
+Edit material 
+parameters
+--- p6 ---
+Erwin Lau 
+Erwin Lau 6
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+LaserMOD
+These are 
+the execute 
+simulation 
+tools
+--- p7 ---
+Erwin Lau 
+Erwin Lau 7
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+Notes on Tutorial
+1) Follow the tutorial in Chapter 4 of the User’s Guide.
+2) In the material parameter file for AlGaAs, kpmat_DIELOPT
+should be set to Diel_Opt0. This affects the index profile.
+3) Frequency response must be run after a successful 
+impulse response using the transient bias feature. The 
+impulse response should show the impulse returning to 
+steady-state (as shown in tutorial).
+4) Power output for L-I-V curves are for both facets total.
+5) In transient, 1st number is time step, 2nd number is # of 
+steps. Make sure all time steps in all transient steps are the 
+same value.
+6) Variables are case-sensitive
+--- p8 ---
+Erwin Lau 
+Erwin Lau 8
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+Notes (continued)
+7) If you see multiple lines when viewing graphs with WinPlot, 
+they are lines from previous simulations.  To clear the old 
+plots, delete the two directories formed in the same 
+directory as the saved .las structure file and run the 
+simulation over.
+8) Sheet carrier density (cm-2) = Carrier density (cm-3) x total 
+quantum well thickness (cm)
+--- p9 ---
+Erwin Lau 
+Erwin Lau 9
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+Where to find things
+• Simulation parameters can be found in several places:
+– Bias Table (I, V)
+– Global Settings (L, T, αi, R)
+– Symbol Table (w)
+– Right-clicking on different laser sections (doping, 
+ternary/quaternary element concentrations, w, d)
+• Derived parameters can be found in a few graphs:
+– Gain Calculation (g)
+– Simulate Laser output graph (g(v,N), L(I), V(I), transient)
+– Generate Plot output, standard plots (N, IV, LI, freq. resp., etc.)
+– Generate Plot output, custom plots (las. freq., Γ, neff, etc.)
+--- p10 ---
+Erwin Lau 
+Erwin Lau 10
+10
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+Deviation from Tutorial
+• The manual and program deviate when trying to simulate the 
+IV characteristics, due to updated material files (and a non-
+updated manual).  If the LIV doesn’t look right, add bias 
+conditions near threshold, between 1.4V and 25mA. (maybe 
+1mA and 2mA as shown below.
+--- p11 ---
+Erwin Lau 
+Erwin Lau 11
+11
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+L-I-V  and Transient Response with new bias 
+points
+•
+L-I-V curves should look like this:
+•
+Transient response should look 
+like this:
+--- p12 ---
+Erwin Lau 
+Erwin Lau 12
+12
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+Charts (cont’d) with new bias points
+•
+Frequency response should look 
+like this:
+•
+You can derive differential gain 
+and transparency carrier density 
+from the Peak Gain curve
+a
+Ntr
+--- p13 ---
+Erwin Lau 
+Erwin Lau 13
+13
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+Numerical Conditions
+•
+After the tutorial is completed, you should be able to extract several 
+parameters (this is an exercise):
+Parameter
+Sym.
+Approx. Value
+Unit
+Extracted from…
+1
+mA
+W/A
+V
+cm-3
+cm-3
+cm2
+%
+cm-1
+eV
+-
+μm
+μm
+Å
+-
+cm-1
+0.8
+peak gain curve
+equation
+LIV curve
+peak gain curve
+electron/hole density curve (above 
+threshold)
+peak gain curve
+confinement curve
+reflectivity value + equation
+lasing frequency curve
+eff. Index curve
+simulation parameter
+simulation parameter
+simulation parameter
+simulation parameter
+1.42
+1.31x1018
+~3x1018
+Differential gain
+a
+1.6x10-15
+Confinement factor
+Γ
+1.88
+Distributed mirror loss
+αm
+20
+Lasing frequency
+ν
+1.24
+Effective index
+neff
+3.09
+Cavity length
+L
+500
+Cavity width
+w
+2
+Quantum well thickness
+d
+80
+Mirror reflectivity
+R
+0.37
+Threshold gain
+gth
+1330
+equation
+Ith
+ηd
+Vth
+Ntr
+Nth
+Threshold current
+Differential quantum efficiency
+Threshold voltage
+Transparency carrier density 
+Threshold carrier density
+--- p14 ---
+Erwin Lau 
+Erwin Lau 14
+14
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+Useful Formulas
+• Output power
+• Mirror loss
+• Threshold gain 
+• Threshold current
+• Differential quantum 
+efficiency
+(
+)
+th
+i
+m
+m
+i
+I
+I
+q
+h
+P
+−
+⎟⎟
+⎠
+⎞
+⎜⎜
+⎝
+⎛
++
+=
+ν
+α
+α
+α
+η
+0
+⎟
+⎠
+⎞
+⎜
+⎝
+⎛
+=
+R
+L
+m
+1
+ln
+1
+α
+m
+i
+th
+g
+α
+α +
+=
+Γ
+⎟⎟
+⎠
+⎞
+⎜⎜
+⎝
+⎛
+=
+n
+th
+i
+th
+N
+qV
+I
+τ
+η
+(Assume internal quantum efficiency, ηi=1)
+d
+w
+L
+V
+⋅
+⋅
+=
+(volume)
+⎟⎟
+⎠
+⎞
+⎜⎜
+⎝
+⎛
+⎟⎟
+⎠
+⎞
+⎜⎜
+⎝
+⎛
++
+=
+q
+h
+i
+m
+m
+d
+ν
+α
+α
+α
+η
+(unitless if without hv/q)
+(See Coldren/Corzine, Chapter 2)
+--- p15 ---
+Erwin Lau 
+Erwin Lau 15
+15
+Integrated Photonics Laboratory, UC Berkeley
+Integrated Photonics Laboratory, UC Berkeley
+Things to try
+• Obtain the frequency response at a lower bias (I=3 mA) 
+(should be around 2-3 GHz)
+• Reduce laser length (L) and observe threshold and ηd
+increase
+• Change # quantum wells, observe threshold change
+• Change width, observe threshold change, ηd should stay 
+same
+• Change ambient temperature, observe LIV change, 
+wavelength change
+• Change mirror reflectivity, observe threshold change and ηd 
+change

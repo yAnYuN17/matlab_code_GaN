@@ -1,0 +1,23 @@
+# MATLAB 临时文件
+*.asv
+*.autosave
+*.m~
+
+# 自动生成目录
+slprj/
+codegen/
+
+# 编译/生成文件
+*.slxc
+*.sfx
+*.mex*
+*.exe
+*.p
+
+# 按需忽略的数据和结果文件
+*.mat
+
+
+# 系统文件
+.DS_Store
+Thumbs.db
