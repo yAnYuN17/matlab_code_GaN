@@ -12,9 +12,7 @@ function modes = Model_Self_L1_7L_EBL(action)
 %       ⇒ Im(n_eff)  >0 [损耗]，<0 [净增益]
 %       Γ ≡ ∫_有源区 w dy / ∫_{-∞}^{+∞} w dy
 %           TE: w = |E_y|²      TM: w = |H_y|²/n²
-%
-%   ── 说明 ──────────────────────────────────────────────────
-%       远场发散角，未实现
+
     %% 初始化
     clc;                                                        %清空命令行窗口
     close all;                                                  %关闭所有已打开的图窗
@@ -52,13 +50,14 @@ function modes = Model_Self_L1_7L_EBL(action)
     
     % 求解项赋值
     opts = struct( ...
-        'n_scan',   20000, ...   % 色散函数扫描点数（根搜索用）
+        'num_scan',   20000, ...   % 色散函数扫描点数（根搜索用）
         'tol',      1e-13, ...   % 求根收敛容差（相对）
         'maxit',    200,   ...   % 最大迭代次数
         'merge',    1e-6,  ...   % 去重时两个根的最小相对间距
         'npts',     800,   ...   % 模场重建时每层采样点数
         'tail_dec', 20,    ...   % 半无限层向外延伸多少个衰减长度
-        'tail_max', 50);         % 延伸长度上限 [μm]
+        'tail_max', 50,    ...   % 延伸长度上限 [μm]
+        'num_ff',     2001);       % 远场角分布采样点数
     
     %% 色散函数求根 → n_eff
     % 束缚模存在条件判定
@@ -93,6 +92,7 @@ function modes = Model_Self_L1_7L_EBL(action)
         [y, E, n_y]   = mode_profile(ne, L, lambda, pol, opts);
         [E, norm_val] = normalize_mode(y, E, n_y, pol);
         [G, det]      = confinement_factor(y, E, n_y, yb, L, pol);
+        ff            = far_field(y, E, k0, opts);
     
         modes(j).n_eff    = ne;              % 有效折射率（本征值）
         modes(j).beta     = k0 * ne;         % 传播常数 [μm^-1]
@@ -104,9 +104,10 @@ function modes = Model_Self_L1_7L_EBL(action)
         modes(j).norm_val = norm_val;        % 归一化积分值，应恒为 1
         modes(j).P_layer  = det.P_layer;     % 各层功率占比，总和 = 1
         modes(j).yb       = yb;
+        modes(j).ff       = ff;              % 快轴远场（结构体—角轴/分布/FWHM/峰值角）
     end
     
-    %% 输出 删除原命令行输出，保留自检。后续可调整为 UI 或者图片        
+    %% 输出 删除原命令行输出，调整为表格输出；保留自检。后续可添加 UI。        
 
     fprintf('── 自检 ──\n');
     % 模式模场归一化自检
@@ -130,27 +131,130 @@ function modes = Model_Self_L1_7L_EBL(action)
     fprintf('\n── 说明 ──\n');
     fprintf('可求解的模式个数: %d \n', find_date.ModeNum);
 
-    %% 绘图（制表）
-    % 表一： 纵轴：层； 横轴：厚度，折射率，各个模式的功率占比，损耗贡献
+    %% 绘图
+    % 画一个三维的脊形波导示意图 （→ UI ?）
+    % 画一个面向光束的x-y的模场分布
+
     % 图一： 纵轴：层厚度：横轴：折射率变化，各模式的模场归一化分布，附限制因子数值
-    % 绘图函数并没对TE、TM进行区分，默认为TE，有需要可以后期修改。
-    % 横坐标区间的标定？。？
+    % 横坐标区间的标定
+    pad = 0.6;                                    % 全图两侧留白 [μm]
+    xr_full = [yb(2,1) - pad, yb(N,1) + pad];
+
+    iact = find([L.is_active]);                   % 有源区层号
+    pad_core = 0.3;                               % 芯区两侧留白 [μm]
+    if isempty(iact)
+        xr_zoom = xr_full;                        % 无有源区则退回全图
+    else
+        xr_zoom = [min(yb(iact,1)) - pad_core, ...
+                   max(yb(iact,2)) + pad_core];
+    end
+    xr_full = [-0.6 2.6];
+    xr_zoom = [1.10 1.62];
 
     % 根据 do_save 决定图窗是否显示
     if do_save, vis = 'off'; else, vis = 'on'; end
-    fig = figure('Visible', vis, 'Position', [60 40 1040 760], ...
+    fig1 = figure('Visible', vis, 'Position', [60 40 1040 760], ...
                  'Name', 'GaN LD slab waveguide', 'Color', 'w');
     
     ax1 = subplot(2,1,1);
     draw_stack(ax1, modes(1).y, real(modes(1).n_y), modes, yb, L, ...
-               [-0.6 2.6], 'northwest');
+               xr_full, 'northwest', pol);
     title(ax1, sprintf('Whole epitaxial stack   (\\lambda = %g nm, %s modes)', ...
                        lambda*1000, pol));
     
+    % 有源区部分局部放大图
     ax2 = subplot(2,1,2);
     draw_stack(ax2, modes(1).y, real(modes(1).n_y), modes, yb, L, ...
-               [1.10 1.62], 'northeast');
+               xr_zoom, 'northeast', pol);
     title(ax2, 'Zoom on the core:  n-wave / QW / p-wave / EBL');
+
+
+
+    % 图二：快轴远场角分布
+    fig2 = figure('Visible', vis, 'Position', [120 80 900 420], ...
+                  'Name', 'GaN LD far field (fast axis)', 'Color', 'w');
+    axf = axes(fig2);
+    hold(axf, 'on'); grid(axf, 'on'); box(axf, 'on');
+
+    thMax = 0;
+    cols  = lines(numel(modes));
+    for k = 1:numel(modes)
+        fk = modes(k).ff;
+        plot(axf, fk.theta*180/pi, fk.I, '-', 'LineWidth', 1.6, 'Color', cols(k,:), ...
+             'DisplayName', sprintf('%s%d  (FWHM = %.2f°, peak = %.2f°)', ...
+                                    pol, k-1, fk.fwhm*180/pi, fk.th_pk*180/pi));
+        thMax = max(thMax, abs(fk.th_pk*180/pi) + fk.fwhm*180/pi);
+    end
+    thMax = min(90, max(15, thMax*1.2));
+
+    % 半高线：FWHM 的判据线。画出来一眼能看出那个数是"量到哪一段" ——
+    % 峰值角偏离 0 的模（多瓣），FWHM 只量到峰值那一瓣。
+    yline(axf, 0.5, ':', 'half', 'Color', [0.4 0.4 0.4], ...
+          'LabelHorizontalAlignment', 'left', 'HandleVisibility', 'off');
+
+    xlim(axf, [-thMax, thMax]);
+    xlabel(axf, '\theta  [deg]   (fast axis, relative to z)');
+    ylabel(axf, '|\Phi(\theta)|^2   (normalized to peak)');
+    title(axf, sprintf('Fast-axis far field   (\\lambda = %g nm, %s)', lambda*1000, pol));
+    legend(axf, 'Location', 'northeast', 'FontSize', 8);
+    hold(axf, 'off');
+
+    %% 制表
+    % uitable 是 UI 控件，exportgraphics 导不出它 —— 'save' 模式只导图。
+    % 两个关键点：
+    %   1.ColumnWidth 默认 'auto' 只按内容算宽，控件拉多大都不会铺满 —— 必须显式设列宽；
+    %   2.传统 figure 的 uitable 没有 RowHeight 属性、行高不可控，
+    %      所以高度按行数贴合内容（宁贴紧、不留白），窗口高度也随内容。
+
+   
+    scr  = get(groot, 'ScreenSize');                   % [1 1 屏宽 屏高]，像素
+    w3   = min(1500, scr(3) - 60);                     % 窗口宽：上限 1500 px，且不出屏
+    rowH = 32;                                         % 单行高 [px]（FontSize 16 约 28，留余量）
+    gap  = 26;                                         % 两块表的间隙 [px]
+    mar  = 14;                                         % 窗口内边距 [px]
+    hT1  = (numel(modes) + 1) * rowH + 10;             % 表一高：数据行 + 表头
+    hT2  = (N + 1)           * rowH + 10;              % 表二高：数据行 + 表头
+
+    fig3 = figure('Visible', vis, 'Name', 'GaN LD - data tables', 'Color', 'w');
+    fig3.InnerPosition = [30 60 w3, hT1 + hT2 + gap + 2*mar];    % 直接定客户区，免估标题栏
+
+    % 表一：纵轴：模式;  横轴：n_eff, beta, Γ, theta_FWHM, 峰值角, 归一化自检数
+    mCols = {'mode', 'n_eff', 'beta [1/um]', 'Gamma', ...
+             'FWHM [deg]', 'peak [deg]', 'norm check'};
+    mData = cell(numel(modes), numel(mCols));
+    for k = 1:numel(modes)
+        mData(k, :) = { sprintf('%s%d', pol, k-1), ...
+                        sprintf('%.8f', real(modes(k).n_eff)), ...
+                        sprintf('%.6f', real(modes(k).beta)), ...
+                        sprintf('%.6f', modes(k).Gamma), ...
+                        sprintf('%.2f',   modes(k).ff.fwhm*180/pi), ...
+                        sprintf('%.2f',   modes(k).ff.th_pk*180/pi), ...
+                        sprintf('%.3e',   modes(k).norm_val) };
+    end
+    t1 = uitable(fig3, 'Data', mData, 'ColumnName', mCols, 'FontSize', 16, ...
+                 'Units', 'pixels');
+
+
+    % 表二： 纵轴：层;  横轴：厚度，折射率，各个模式的功率占比，损耗贡献
+    lCols = [{'#', 'tag', 'd [um]', 'n'}, ...
+             arrayfun(@(j) sprintf('P(%s%d) [%%]', pol, j-1), ...
+                      1:numel(modes), 'UniformOutput', false)];
+    lData = cell(N, numel(lCols));
+    for k = 1:N
+        dstr = 'Inf';
+        if isfinite(L(k).d), dstr = sprintf('%.4f', L(k).d); end
+        lData(k, 1:4) = { sprintf('%d', k), L(k).tag, dstr, sprintf('%.4f', real(L(k).n)) };
+        for j = 1:numel(modes)
+            lData{k, 4+j} = sprintf('%.4f', 100*modes(j).P_layer(k));
+        end
+    end
+    t2 = uitable(fig3, 'Data', lData, 'ColumnName', lCols, 'FontSize', 16, ...
+                 'Units', 'pixels');
+
+    % 首次布局：列宽按窗口宽等分铺满、两块表上下排好；拉伸窗口时自动重排
+    relayout_tables(fig3, t1, t2, mCols, lCols);
+    fig3.SizeChangedFcn = @(s, ~) relayout_tables(s, t1, t2, mCols, lCols);
+
 
     %% 保存 
     if do_save
@@ -160,9 +264,12 @@ function modes = Model_Self_L1_7L_EBL(action)
         if ~exist(outdir, 'dir')
             mkdir(outdir); 
         end
+
         % 图形导出函数(图形窗口句柄，输出路径，分辨率)
-        exportgraphics(fig, fullfile(outdir, 'ebl_modes.png'), 'Resolution', 160);
-        close(fig);
+        % 表格 figure 是 uitable，导不出也不关
+        exportgraphics(fig1,  fullfile(outdir, 'ebl_modes.png'),  'Resolution', 160);
+        exportgraphics(fig2, fullfile(outdir, 'fast_field.png'), 'Resolution', 160);
+        close([fig1, fig2]);        
         fprintf('\n图片已保存，地址：%s \n\n',outdir);
     end
 end
@@ -226,13 +333,13 @@ end
 % 说明：field-字段；任一字段与数值都要有
 % ───────────────────────────────────────────────────────────────────────────────────
 function L = build_layers(layers)
+    %layers为至少3层的结构体数组
+    %assert(条件A，输出'B'),如果A不满足，输出B
     assert(isstruct(layers) && ~isempty(layers), 'build_layers: layers 必须是 struct 数组');
     N = numel(layers);
     assert(N >= 3, ...
         'build_layers: 至少需要 3 层（两侧半无限包层 + 至少一个有限层），当前 %d 层', N);
-    %layers为至少3层的结构体数组
-    %assert(条件A，输出'B'),如果A不满足，输出B
-    
+   
     L = layers;
     for k = 1:N
         assert(isfield(L(k), 'd') && ~isempty(L(k).d), 'build_layers: 第 %d 层缺少字段 d', k);
@@ -275,8 +382,8 @@ end
 % 输入：规范化后的层结构体
 % 输出：二维数组。每层对应y值区间的上、下限。
 % 说明：
-%   依照各层厚度，明确各层的y区间。
-%   L(2) 的下沿位于 y = 0，递增
+%   1.依照各层厚度，明确各层的y区间。
+%   2.L(2) 的下沿位于 y = 0，递增
 % ───────────────────────────────────────────────────────────────────────────────────
 function yb = layer_bounds(L)
     N = numel(L);
@@ -302,7 +409,6 @@ end
 %   TM: M=[cos(kh) , n^2/ksin(kh); -k/n^2 * sin(kh) , cos(kh)]
 % ───────────────────────────────────────────────────────────────────────────────────
 function [a11, a12, a21, a22] = layer_matrix(kz, d, n, pol)
-    % 能否转移到校验函数？
     % isscalar(d)，d为标量(不为数组)，返回truth
     assert(isscalar(d) && d > 0, 'layer_matrix: 层厚 d 必须为正标量');
         
@@ -335,14 +441,16 @@ end
 % 函数：传输矩阵计算
 % 输入：有效折射率 n_eff; 层数据结构体 L; 波长 lambda; 偏振 pol
 % 输出：f：某一n_eff下（其他参量数值默认）的传输矩阵输出(输出为0即满足，是束缚模)。
-%       aux：结构体，包含连乘后的传输矩阵、p0、p2(参见'说明'中两个公式的左侧)。
+%       aux：结构体 (参见'说明'中两个公式的左侧)。
+%           aux.gam_sub  p0
+%           aux.gam_cov  p2
+%           aux.M        连乘后的传输矩阵 M
 % 调用函数：[a11, a12, a21, a22] = layer_matrix(kz, d, n, pol)
 % 说明：
-%   TE：[-p0,1] M^TE [1;-p2]=0
-%   TM: [-p0/n0^2] M^TM [1; -p2/n2^2]=0
-%   n_eff其实是待解项，通过遍历所有n_eff，保留满足公式的n_eff
-%   有限真实边界需重新考虑（个人觉得）
-%   复折射率也是这个条件？？
+%   1.TE：[-p0,1] M^TE [1;-p2]=0
+%     TM: [-p0/n0^2] M^TM [1; -p2/n2^2]=0
+%   2.n_eff其实是待解项，通过遍历所有n_eff，保留满足公式的n_eff
+%   3.个人：有限真实边界需重新考虑；复折射率也是这个条件？
 % ───────────────────────────────────────────────────────────────────────────────────
 %       TE : v = [E_y ; dE_y/dy]           界面连续：E_y 与 dE_y/dy
 %       TM : v = [H_y ; (1/n²)·dH_y/dy]    界面连续：H_y 与 (1/n²)dH_y/dy
@@ -399,24 +507,28 @@ end
 % 输入：函数 dispersion_tmm; n_lo 底层折射率，n_hi 顶层折射率; 
 %           n_roots 求解模式数; opts 求解要用参数
 % 输出：roots_n：规定模式数下的 n_eff 解。
-%      info：结构体，记录本次求解的模数, 对应扫描点数, 最大求解模式数
+%      info：结构体
+%           info.mode       折射率性质（实/复）
+%           info.ModeNum    可求解的最大模数
+%           info.n_found    本次求解的模数
+%           info.scanned    求解中采用的扫描点数
 % 调用函数：scan_bisect，scan_newton
 % 说明：
-%   输入里有函数，是因为该函数需额外输出参量
-%   本函数考虑了实折射率和复折射率
+%   1.输入里有函数，是因为该函数需额外输出参量
+%   2.本函数考虑了实折射率和复折射率
 % ───────────────────────────────────────────────────────────────────────────────────
 function [roots_n, info] = find_roots_complex(fun, n_lo, n_hi, n_roots, opts)
     % 输出参数补齐，及求解项数值判定
     if nargin < 4 || isempty(n_roots), n_roots = 5; end
     if nargin < 5 || isempty(opts), opts = struct(); end
-    if ~isfield(opts, 'n_scan'), opts.n_scan = 20000; end %扫描点数
-    if ~isfield(opts, 'tol'),    opts.tol    = 1e-13; end %求根收敛容差
-    if ~isfield(opts, 'maxit'),  opts.maxit  = 200;   end %最大迭代次数
-    if ~isfield(opts, 'merge'),  opts.merge  = 1e-6;  end %去重时两个根的最小相对间距
+    if ~isfield(opts, 'num_scan'), opts.num_scan = 20000; end   %扫描点数
+    if ~isfield(opts, 'tol'),    opts.tol    = 1e-13; end       %求根收敛容差
+    if ~isfield(opts, 'maxit'),  opts.maxit  = 200;   end       %最大迭代次数
+    if ~isfield(opts, 'merge'),  opts.merge  = 1e-6;  end       %去重时两个根的最小相对间距
     
     assert(n_hi > n_lo, 'find_roots_complex: 要求 n_hi > n_lo');
     
-    xs = linspace(n_lo, n_hi, opts.n_scan);               %均匀扫描
+    xs = linspace(n_lo, n_hi, opts.num_scan);                   %均匀扫描
     fs = fun(xs);
     fs = fs(:).';
     
@@ -428,14 +540,14 @@ function [roots_n, info] = find_roots_complex(fun, n_lo, n_hi, n_roots, opts)
     is_real = all(abs(imag(fs)) <= 1e-10 * fscale);
     
     if is_real
-        roots_n = scan_bisect(fun, xs, real(fs), opts);   %二分法
+        roots_n = scan_bisect(fun, xs, real(fs), opts);         %二分法
         info.mode = 'real';
     else
-        roots_n = scan_newton(fun, xs, fs, opts);         %牛顿法
+        roots_n = scan_newton(fun, xs, fs, opts);               %牛顿法
         info.mode = 'complex';
     end
     
-    % 去重、降序、截断
+    % 去重、降序、（第一次）截断
     if ~isempty(roots_n)
         roots_n = sort(roots_n(:).', 'descend');
         % 第一个根恒保留(true)，后面每个根与前一根的差大于阈值才保留。
@@ -450,7 +562,7 @@ function [roots_n, info] = find_roots_complex(fun, n_lo, n_hi, n_roots, opts)
     end
     
     info.n_found = numel(roots_n);
-    info.scanned = opts.n_scan;
+    info.scanned = opts.num_scan;
 end
 
 
@@ -460,8 +572,8 @@ end
 %       待测n_eff的转移矩阵输出 fr(向量); 求解要用参数 opts
 % 输出：满足条件的n_eff
 % 说明：
-%   二分只依赖"闭区间两端符号相反"这个充分条件，不要求函数单调或光滑
-%   用于实折射率
+%   1.二分只依赖"闭区间两端符号相反"这个充分条件，不要求函数单调或光滑
+%   2.本函数用于实折射率
 % ───────────────────────────────────────────────────────────────────────────────────
 function roots_n = scan_bisect(fun, xs, fr, opts)
     roots_n = [];
@@ -503,7 +615,7 @@ end
 % 输出：满足条件的n_eff
 % 调用函数：newton_complex
 % 说明：
-%   用于复折射率
+%   本函数用于复折射率
 % ───────────────────────────────────────────────────────────────────────────────────
 function roots_n = scan_newton(fun, xs, fs, opts)
     %SCAN_NEWTON  复值分支：定位 |f| 的局部极小，再用复数牛顿细化
@@ -575,10 +687,11 @@ end
 % 输出：对应n_eff的模场分布[横轴y，纵轴E(模场)、n(折射率)，每层的y轴上下界]
 % 调用函数：tail_depth
 % 说明：
-%   从底部半无限层的边界状态出发，用 TMM 逐层向上传输
-%   输出 E 未归一化；TE 为 E_y，TM 为 H_y。
-%   层-厚度y-模场E-折射率n 一一对应。一个元胞对应一层，一层对应含有npts个结点的厚度，每
+%   1.从底部半无限层的边界状态出发，用 TMM 逐层向上传输
+%   2.输出 E 未归一化；TE 为 E_y，TM 为 H_y。
+%   3.层-厚度y-模场E-折射率n 一一对应。一个元胞对应一层，一层对应含有npts个结点的厚度，每
 %                                 个厚度的值(E or n)不一样的。
+%   4.个人：yb还要输出吗
 % ───────────────────────────────────────────────────────────────────────────────────
 function [y, E, n_y, yb] = mode_profile(n_eff, L, lambda, pol, opts)
     if nargin < 5 || isempty(opts), opts = struct(); end
@@ -588,7 +701,7 @@ function [y, E, n_y, yb] = mode_profile(n_eff, L, lambda, pol, opts)
     
     k0 = 2*pi/lambda;
     N  = numel(L);
-    yb = layer_bounds(L);       % yb 还要输出吗？
+    yb = layer_bounds(L);       
     d_total = yb(N, 1);         % 总厚度（不考虑第1、N层）
     
     gam_sub = k0 * sqrt(complex(n_eff^2 - L(1).n^2));
@@ -624,7 +737,7 @@ function [y, E, n_y, yb] = mode_profile(n_eff, L, lambda, pol, opts)
         kz = k0 * sqrt(complex(nk^2 - n_eff^2));
     
         yy = linspace(cur_y, cur_y + dk, opts.npts);
-        dy = yy - cur_y;        % 有什么意义？
+        dy = yy - cur_y;        
         
         %取极限
         if abs(kz) < 1e-14
@@ -671,7 +784,8 @@ function [y, E, n_y, yb] = mode_profile(n_eff, L, lambda, pol, opts)
     E   = [E_cell{:}];
     n_y = [n_cell{:}];
     
-    % 折射率全实且 n_eff 为实时，清掉运算中产生的 0 虚部    如果折射率全实，哪里来的虚部？
+    % 折射率全实且 n_eff 为实时，清掉运算中产生的 0 虚部; 
+    % 虚部来自 complex() 的类型强制，需处理避免绘图警告
     if imag(n_eff) == 0 && all(imag([L.n]) == 0)
         E   = real(E);
         n_y = real(n_y);
@@ -687,8 +801,8 @@ end
 % 输入：横向衰减常数 gam; 求解要用参数 opts
 % 输出：衰减厚度
 % 说明：
-%   默认 20 个衰减长度
-%   延伸不足会让 Γ 系统性偏小
+%   1.默认 20 个衰减长度
+%   2.延伸不足会让 Γ 系统性偏小
 % ───────────────────────────────────────────────────────────────────────────────────
 function dep = tail_depth(gam, opts)
     g = real(gam);
@@ -706,10 +820,10 @@ end
 % 输入：坐标系 E-y,n-y; 偏振 pol; 模式序数 ord
 % 输出：E：归一化后的模场分布; norm_val：自检数
 % 说明：
-%   E(y,z,t) = φ(y)·exp(i(βz − ωt))
-%   TE:  S_z ∝ β·|E_y|²
-%   TM:  S_z ∝ (β/n²)·|H_y|²
-%   norm_val 用于归一化后复算，应恒为 1
+%   1.E(y,z,t) = φ(y)·exp(i(βz − ωt))
+%   2.TE:  S_z ∝ β·|E_y|²
+%     TM:  S_z ∝ (β/n²)·|H_y|²
+%   3.norm_val 用于归一化后复算自检，应恒为 1
 % ───────────────────────────────────────────────────────────────────────────────────
 function [E, norm_val] = normalize_mode(y, E, n_y, pol)
     if strcmpi(pol, 'TE')
@@ -737,13 +851,16 @@ end
 % 函数：限制因子
 % 输入：坐标系 E-y,E-n; 厚度 yb; 层数据结构体 L; 偏振 pol
 % 输出：G：限制因子; 
-%       detail：结构体，含有源区总功率 P_act，Ld总功率 P_tot，各层功率(向量) P_layer
+%       detail：结构体
+%           detail.P_act    有源区总功率
+%           detail.P_tot    激光器总功率
+%           detail.P_layer  各层功率(向量)
 % 说明：
-%   口径需要统一。
-%   本函数：全部 is_active 层的并集; 无穷积分
-%   MQWs 是全部阱层的并集。考虑势垒。
-%   分母范围需要明确：无穷积分，还是截断到外延结构。对漏模只有无穷积分是自洽的。
-%   此函数可以考虑和模场归一化合并。
+%   1.口径需要统一。
+%   2.本函数：全部 is_active 层的并集; 无穷积分
+%   3.MQWs 是全部阱层的并集。需考虑把势垒排除。
+%   4.分母范围需要明确：无穷积分，还是截断到外延结构。对漏模只有无穷积分是自洽的。
+%   5.此函数可以考虑和模场归一化合并。
 % ───────────────────────────────────────────────────────────────────────────────────
 function [G, detail] = confinement_factor(y, E, n_y, yb, L, pol)
     if strcmpi(pol, 'TE')
@@ -755,9 +872,10 @@ function [G, detail] = confinement_factor(y, E, n_y, yb, L, pol)
     P_tot = trapz(y, w);
     assert(P_tot > 0, 'confinement_factor: 总功率积分非正');
     
-    % ── 各层功率占比（与 is_active 无关）─────────────────────────
+    % ── 各层功率（与 is_active 无关）与有源区功率 ────────────────
     N = numel(L);
     P_layer = zeros(1, N);
+    P_act   = 0;
     % 将顶层、底层区分出来；获取各层的区间
     for k = 1:N
         if isinf(yb(k,1))           % 底层
@@ -767,12 +885,16 @@ function [G, detail] = confinement_factor(y, E, n_y, yb, L, pol)
         else
             mk = (y >= yb(k,1) & y <= yb(k,2));
         end
-        if any(mk)
-            P_layer(k) = trapz(y(mk), w(mk)) / P_tot;
+        if ~any(mk), continue; end
+
+        Pk = trapz(y(mk), w(mk));           % 本层积分只算一次
+        P_layer(k) = Pk / P_tot;
+        if L(k).is_active
+            P_act = P_act + Pk;
         end
     end
     
-    % 判断是否有有源区，无返回NaN
+    % 判断是否有有源区，无则返回NaN
     % 不返回 0，避免误认为"模式与有源区完全不重叠"
     act = [L.is_active];
     if ~any(act)
@@ -781,44 +903,124 @@ function [G, detail] = confinement_factor(y, E, n_y, yb, L, pol)
         return;
     end
     
-    % 逐层单独积分再求和     % 这个和上面是不是部分重复了，可以合并的；或者获取索引再求和？
-    P_act = 0;
-    for k = 1:N
-        if ~L(k).is_active, continue; end
-        if isinf(yb(k,1))
-            mk = (y <= yb(k,2));
-        elseif isinf(yb(k,2))
-            mk = (y >= yb(k,1));
-        else
-            mk = (y >= yb(k,1) & y <= yb(k,2));
-        end
-        if any(mk)
-            P_act = P_act + trapz(y(mk), w(mk));
-        end
-    end
     G = P_act / P_tot;
     
     detail = struct('P_act', P_act, 'P_tot', P_tot, 'P_layer', P_layer);
 end
 
+
 % ───────────────────────────────────────────────────────────────────────────────────
-% 函数：绘图、制表
-% 输入：坐标系 ax; 快轴坐标 y; 折射率(对应快轴坐标) n_y; 模式数据结构体 m;
-%       各层上下限 yb; 层数据结构体 L; 横轴显示范围 xr; 图例位置(字符串) legloc
-% 输出：可视化图片，数据表格
+% 函数：快轴远场角分布与 FWHM 发散角
+% 输入：快轴坐标 y; 归一化模场 E; 真空波数 k0; 求解要用参数 opts
+% 输出：ff：结构体
+%         ff.theta   远场角轴 [rad]，范围 ±π/2（半空间）
+%         ff.I       角分布 |Φ(θ)|²，已归一化到峰值 1
+%         ff.fwhm    半高全宽（FWHM）[rad]
+%         ff.th_pk   峰值所在的角度 [rad]
+% 调用函数：fwhm_angle
 % 说明：
-%   在一个坐标轴上同时画折射率分布(左轴)与各阶模场(右轴)
-%   纵轴范围由当前窗口内的数据算出。
-%   层底色必须画在左轴，与折射率线同轴。yyaxis 的两根轴是分层渲染（右轴整体盖在左轴之上）;
-%   若把底色画在右轴，它会把折射率线整条盖成灰色。
+%   1.口径取 FWHM（半高全宽）
+%   2.远场角分布 = 近场的空间傅里叶变换（Fraunhofer 近似）：
+%       Φ(θ) ∝ ∫ φ(y)·exp(−i·k₀·sinθ·y) dy
+%   3.θ 是相对 z 轴的夹角。
+%   4.近场需要截断，截断是因为：模场理论上延伸到无穷，只不过在顶层、底层衰减
+%     至趋于 0，但是仍是有数值的。因此需要截断，相当于 *一个方窗，即远场多一
+%     次 sinc 卷积，影响到 FWHM。存疑时的查法：把 opts.tail_dec由 20 改成 
+%     40 重跑，FWHM 不变即证明截断无影响。
+%   5.多瓣模（th_pk ≠ 0）的 fwhm 必须连 th_pk 一起读。同一个数字在不同模上
+%     含义不同，报告时必须带上 th_pk。逻辑：FWHM 从峰值角出发，寻找两端 =half 
+%     的位置（角轴上为对应角度）。存在两种情况：1.该峰与另一个峰都 >half，FWHM
+%     囊括多个峰；2.该峰的两端凹陷 <half,FWHM 仅包含这一个峰。  
+%   6. θ = 0 不对应任何一个 y，远场 |Φ|² 与 y 的原点选取无关。
 % ───────────────────────────────────────────────────────────────────────────────────
-function draw_stack(ax, y, n_y, m, yb, L, xr, legloc)
-    % 绘图
-    %     |φ|² 归一化后峰值 = 1/(有效宽度)，对本结构约 3.4，不是 1。
-    %
-    %   ⚠ 层底色必须画在【左轴】，与折射率线同轴。yyaxis 的两根轴是分层
-    %     渲染的（右轴整体盖在左轴之上，与绘制先后无关）；若把底色画在右轴，
-    %     它会把折射率线整条盖成灰色。
+function ff = far_field(y, E, k0, opts)
+    if nargin < 4 || isempty(opts), opts = struct(); end
+    if ~isfield(opts, 'num_ff'), opts.num_ff = 2001; end
+
+    y = reshape(y, 1, []);                             % 统一成行向量
+    E = reshape(E, 1, []);
+
+    theta = linspace(-pi/2, pi/2, opts.num_ff);        % 角轴 [rad]
+    ky    = k0 * sin(theta);                           % 横向波数 [μm^-1]
+
+    % 傅里叶积分。被积函数 φ(y)·exp(−i·ky·y) 在层界面上连续，且 y 单调递增，
+    % 所以可以直接 trapz —— 与 Γ 那处的"分段积分"不是一回事：那里跳的是 mask，
+    % 这里积的是连续函数。
+    Phi = trapz(y, E .* exp(-1i * ky(:) * y), 2);      % num_ff×1
+
+    I = abs(Phi).^2;
+    I = I / max(I);                                    % 峰值归一
+
+    [dw, th_pk] = fwhm_angle(theta, I);
+
+    ff = struct('theta', theta, 'I', I, 'fwhm', dw, 'th_pk', th_pk);
+end
+
+
+% ───────────────────────────────────────────────────────────────────────────────────
+% 函数：角分布的半高全宽
+% 输入：角轴 theta [rad]（单调递增）; 角分布 I_theta（已按峰值归一）
+% 输出：dw：半高全宽 [rad]; th_pk：峰值所在的角度 [rad]
+% 说明：
+%   1.自峰值向两侧找第一个低于半高的采样点，在跨半高的相邻两点间线性插值。
+%   2.任一侧在半空间内都没降到半高时返回 NaN —— NaN 表示"无定义"，
+%   3.不要用一个大数代替：那会被下游读成"发散角很大"这个物理结论。
+% ───────────────────────────────────────────────────────────────────────────────────
+function [dw, th_pk] = fwhm_angle(theta, I_theta)
+    half = 0.5;
+    n = numel(theta);
+    [~, i0] = max(I_theta);
+    th_pk = theta(i0);
+
+    % 峰值落在角轴端点上时，无法向该侧找半高
+    if i0 <= 1 || i0 >= n
+        dw = NaN;
+        return;
+    end
+
+    iR = find(I_theta(i0:end)  < half, 1, 'first');
+    iL = find(I_theta(i0:-1:1) < half, 1, 'first');
+    if isempty(iR) || isempty(iL)
+        dw = NaN;                                      % 半空间内未降到半高
+        return;
+    end
+    iR = i0 + iR - 1;
+    iL = i0 - iL + 1;
+
+    % 跨半高的相邻两点间线性插值（interp1 要求 X 单调递增）
+    thR = interp1([I_theta(iR) I_theta(iR-1)], [theta(iR) theta(iR-1)], half);
+    thL = interp1([I_theta(iL) I_theta(iL+1)], [theta(iL) theta(iL+1)], half);
+
+    dw = abs(thR - thL);
+end
+
+
+% ───────────────────────────────────────────────────────────────────────────────────
+% 函数：模场分布绘图
+% 输入：坐标系 ax; 快轴坐标 y; 折射率(对应快轴坐标) n_y; 模式数据结构体 m;
+%       各层上下限 yb; 层数据结构体 L; 横轴显示范围 xr; 图例位置(字符串) legloc;
+%       偏振 pol
+% 输出：模场分布图
+% 说明：
+%   1.在一个坐标轴上同时画折射率分布(左轴)与各阶模场(右轴)
+%   2.纵轴范围由当前窗口内的数据算出。
+%   3.|φ|² 归一化后峰值 = 1/(有效宽度)
+%   4.TE 画功率密度 |E_y|²，TM 画 |H_y|²/n²，两者量级不同，纵轴上限跟着切换。
+%   5.层底色必须画在左轴，与折射率线同轴。yyaxis 的两根轴是分层渲染（右轴整体盖在
+%       左轴之上，与绘制先后无关）；若把底色画在右轴，它会把折射率线整条盖成灰色。
+% ───────────────────────────────────────────────────────────────────────────────────
+function draw_stack(ax, y, n_y, m, yb, L, xr, legloc, pol)
+    if nargin < 9 || isempty(pol), pol = 'TE'; end
+    is_TE = strcmpi(pol, 'TE');
+
+    % 功率权重与纵轴名
+    if is_TE
+        wfun = @(E) abs(E).^2;
+        ylab = '|\phi(y)|^2';
+    else
+        wfun = @(E) abs(E).^2 ./ max(real(n_y).^2, eps);
+        ylab = '|\phi(y)|^2 / n(y)^2';
+    end
     
     axes(ax); 
     cla(ax);                                % 清空该轴内容
@@ -836,7 +1038,7 @@ function draw_stack(ax, y, n_y, m, yb, L, xr, legloc)
     % 模场-纵轴的区间范围
     pk = 0;
     for k = 1:numel(m)                      % numel(m) 总模式数
-        w = abs(m(k).E).^2;                 
+        w = wfun(m(k).E);                 
         pk = max(pk, max(w(sel)));
     end
     ytop = pk * 1.10;                       % 右轴上限：留 10% 余量给图例和峰
@@ -871,16 +1073,13 @@ function draw_stack(ax, y, n_y, m, yb, L, xr, legloc)
     
     % 模场
     cols = lines(numel(m));                 % 生成一组区分度好的颜色
-    % is_TE = strcmpi(pol, 'TE');
-    % if is_TE
-        for k = 1:numel(m)
-            plot(ax, y, abs(m(k).E).^2, '-', 'LineWidth', 1.7,  ...
-                 'Color', cols(k,:),'DisplayName',  ...
-                 sprintf('TE%d  (n_{eff}=%.5f, \\Gamma=%.4f)',k-1, real(m(k).n_eff), m(k).Gamma));
-        end
-        ylabel(ax, '|\phi(y)|^2');
-    % else
-    % end
+    for k = 1:numel(m)
+        plot(ax, y, wfun(m(k).E), '-', 'LineWidth', 1.7,  ...
+             'Color', cols(k,:),'DisplayName',  ...
+             sprintf('%s%d  (n_{eff}=%.5f, \\Gamma=%.4f)', pol, k-1, ...
+                     real(m(k).n_eff), m(k).Gamma));
+    end
+    ylabel(ax, ylab);
     
     % 层边界
     for k = 2:numel(L)
@@ -905,4 +1104,33 @@ function draw_stack(ax, y, n_y, m, yb, L, xr, legloc)
     xlim(ax, xr);
     legend(ax, 'Location', legloc, 'FontSize', 8);  % 生成图例
     hold(ax, 'off');
+end
+
+
+% ───────────────────────────────────────────────────────────────────────────────────
+% 函数：relayout_tables（把两块表格铺满窗口宽度并上下排好）
+% 输入：fig（figure 句柄）; t1（模式表句柄）; t2（层表句柄）; mCols; lCols（两表的列名）
+% 输出：无（就地更新 t1、t2 的 ColumnWidth 与 Position）
+% 说明：
+%   1.传统 figure 的 uitable 没有 RowHeight 属性、行高不可控，故高度按行数固定；
+%     而 ColumnWidth 默认 'auto' 不会自己铺满控件，必须按窗口宽度显式等分。
+%   2.本函数既用于首次布局，也挂在 fig 的 SizeChangedFcn 上做窗口拉伸重排。
+%   3.常量 rowH / gap / mar 须与制表段保持一致。
+% ───────────────────────────────────────────────────────────────────────────────────
+function relayout_tables(fig, t1, t2, mCols, lCols)
+    rowH = 32;                                         % 单行高 [px]，与制表段同值
+    gap  = 26;                                         % 两表间隙 [px]
+    mar  = 14;                                         % 窗口内边距 [px]
+
+    wp  = get(fig, 'InnerPosition');                   % 客户区当前几何
+    w   = wp(3);
+    h1  = (size(get(t1, 'Data'), 1) + 1) * rowH + 10;  % 表一高：数据行 + 表头
+    h2  = (size(get(t2, 'Data'), 1) + 1) * rowH + 10;
+    cw1 = floor((w - 2*mar) / numel(mCols));           % 每列宽 = 可用宽 / 列数
+    cw2 = floor((w - 2*mar) / numel(lCols));
+
+    set(t1, 'ColumnWidth', num2cell(repmat(cw1, 1, numel(mCols))), ...
+            'Position',    [mar, 2*mar + h2 + gap, w - 2*mar, h1]);
+    set(t2, 'ColumnWidth', num2cell(repmat(cw2, 1, numel(lCols))), ...
+            'Position',    [mar, mar,               w - 2*mar, h2]);
 end
