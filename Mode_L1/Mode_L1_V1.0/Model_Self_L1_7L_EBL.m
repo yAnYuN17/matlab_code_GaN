@@ -946,6 +946,7 @@ function ff = far_field(y, E, k0, opts)
     % 傅里叶积分。被积函数 φ(y)·exp(−i·ky·y) 在层界面上连续，且 y 单调递增，
     % 所以可以直接 trapz —— 与 Γ 那处的"分段积分"不是一回事：那里跳的是 mask，
     % 这里积的是连续函数。
+    % 2 指沿矩阵的第 2 维积分
     Phi = trapz(y, E .* exp(-1i * ky(:) * y), 2);      % num_ff×1
 
     I = abs(Phi).^2;
