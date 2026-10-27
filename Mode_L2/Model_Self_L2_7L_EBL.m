@@ -1,4 +1,4 @@
-function modes = Model_Self_L2_7L_EBL(action)
+function modes = Model_Self_L2_7L_EBL(action, opt)
 %   ── 命名规则 ──────────────────────────────────────────────
 %      函数文件，函数名必须与文件名<.m>一致
 %      直接"运行"，以0输入调用该函数
@@ -12,17 +12,38 @@ function modes = Model_Self_L2_7L_EBL(action)
 %       ⇒ Im(n_eff)  >0 [损耗]，<0 [净增益]
 %       Γ ≡ ∫_有源区 w dy / ∫_{-∞}^{+∞} w dy
 %           TE: w = |E_y|²      TM: w = |H_y|²/n²
+%
+%   —— 模型说明 ──────────────────────────────────────────────
+%       1.加入损耗后模场几乎不变：α 只进折射率的虚部，量级 1e-5；
+%         模场形状由实部台阶（Δn≈0.05）决定。
+%       2.KIO是指文献'Determination of Internal Loss in Nitride 
+%         Lasers from First Principles'的作者 Kioupakis，通过文献
+%         中的四阶多项式，由层材料计算层吸收系数; MIN 是DS的一个最小
+%         假设，仅设置了EBL和p包层
+%       3.本阶段模型支持解算参数显式传入，兼容本地预设调用。检验脚本只通
+%         过 Model_Self_L2_7L_EBL('solve', opt) 取数，不再直接改全局表。
+%       4.本模型共求解两遍：先求解实折射率(即第一阶段)，再求解复折射率，以
+%         一阶段结果为锚点相比较。因为损耗对模场的影响几乎不计，本模型产出
+%         中，仅损耗-吸收系数 \alpha_i的数据源于第二遍求解，其余数据源自第
+%         一遍求解。
+%
 %  ── 符号说明────────────────────────────────────────────────
 %       !! 仍有疑惑的地方，或者需要后续注意的内容（严重）
-%       && 需要再想想，当前无法解决或者难以弄清。
+%       &&& 需要再想想，当前无法解决或者难以弄清。
 %       % ## 上一版代码内容，在更新后被注释
 %       % !! 代码更新后，追加的注释。
-    %% 初始化
+
+    %% 初始化和动作判定
+    global STAGE2_ALPHA
+
     clc;                                                        %清空命令行窗口
     close all;                                                  %关闭所有已打开的图窗
     % clear;                                                      %清除变量
-    
-    
+        
+    if nargin < 2 || isempty(opt)
+        opt = struct();                                         % 无第二入参时给空结构体，旧调用全部兼容
+    end
+
     % 模型选择（已有，或者自己再建；下述代码可自行添加或修改）
     % 没有输入或者输入为空，默认action为"show"。nargin为函数实际收到的输入参数数量。
     % 检查字符串中是否含有"save"和"9"，有则为真。转字符串转小写。
@@ -33,39 +54,25 @@ function modes = Model_Self_L2_7L_EBL(action)
     use9     = contains(lower(string(action)), '9');
     usetest  = contains(lower(string(action)), 'test');
 
-    % ## 复根的后验检查（阶段2） S4：新增动作 'rootcheck'——根后验检查自测（构造函数 + 真实 7 层结构）
+    % 根后验检查自测
     if contains(lower(string(action)), 'rootcheck')
         modes = stage2_rootcheck_selftest();
         return
     end
 
-    % ## 微扰标尺 B1/B2/B3（不画图，只算）
-    if contains(lower(string(action)), 's5')
-        modes = stage2_s5_perturbation();
+    % 吸收截面 σ [cm^2] 输出
+    % strtrim(…), 去掉首尾空格
+    if strcmpi(strtrim(string(action)), 'sigma')
+        modes = stage2_sigma_api(opt);
         return
     end
 
-    % ## TMM 数值稳定性（三层均匀吸收，α 1→1e5 cm⁻¹）
-    if contains(lower(string(action)), 's6')
-        modes = stage2_s6_tmm_stability();
-        return
-    end
-
-    % ## 阶段2 S7：新增动作 's7self'——用原文 Table II 反查 Table I 系数抄录是否正确
-    if contains(lower(string(action)), 's7self')
-        modes = stage2_s7_selftest();
-        return
-    end
-
-    % ## 四通道分解 + 厚度扫描 + 衬底折射率扫描
-    if contains(lower(string(action)), 's7')
-        modes = stage2_s7_channels();
-        return
-    end
-
-    % ## 同结构三波长（405/450/520 nm）对比
-    if contains(lower(string(action)), 's8')
-        modes = stage2_s8_three_lambda();
+    % !! 阶段2 B 步：参数化解算接口。
+    % !! 用法：S = Model_Self_L2_7L_EBL('solve', struct('lambda',0.45,'pol','TE', ...
+    % !!        'stack','7','scenario','kio'))  或 'alpha' 显式给层表。
+    % !! 返回：每模一个结构体，含 ne / Gamma / P_layer / alpha / contrib / ch / ok。
+    if contains(lower(string(action)), 'solve')
+        modes = stage2_solve_api(opt);
         return
     end
     
@@ -77,6 +84,15 @@ function modes = Model_Self_L2_7L_EBL(action)
         layers = test_layer(lambda);         
     else
         layers = stack_7layer(lambda);       
+    end
+
+    % 层结构记录，用于损耗重建
+    if use9
+        stack_name = '9';
+    elseif usetest
+        stack_name = 'test';
+    else
+        stack_name = '7';
     end
 
     % 赋值
@@ -145,9 +161,72 @@ function modes = Model_Self_L2_7L_EBL(action)
         modes(j).Gamma    = G;               % 限制因子
         modes(j).norm_val = norm_val;        % 归一化积分值，应恒为 1
         modes(j).P_layer  = det.P_layer;     % 各层功率占比，总和 = 1
-        modes(j).yb       = yb;
+        modes(j).yb       = yb;              % 各层的上下限
         modes(j).ff       = ff;              % 快轴远场（结构体—角轴/分布/FWHM/峰值角）
     end
+
+    %% 复折射率求解 + 层损耗重建
+    % 正虚部 = 损耗(重申)。
+    % α_i = 2·k0·Im(n_eff)·1e4 = 1e4/Re(n_eff) * Σ_j P_j·α_j·n_rj
+    % 总损耗求解以及层分解用零吸收解的 P_j（各层功率占比；视为微扰）
+    % loss(j).复折射率架构X; j是模式
+    %   loss(j).X.ai        有效折射率的虚部
+    %   loss(j).X.lit       各层损耗(alay)*功率占比 → 求和总损耗
+    %   loss(j).X.alay      各层损耗
+    %   loss(j).X.aj        层分解，求各层对应模场分布的损耗系数
+    %   loss(j).X.ch        层损耗总结为四通道，sub/n/act/p/other(contact,=0)
+    % 为什么用实部求解的模式数？ &&&
+
+    scen = {'kio', 'min'};
+    sno  = {'KIO', 'MIN'};
+    loss = struct([]);
+    % 结构体数组的字段必须预先对齐：先用占位值把 kio/min 同时建出来，
+    %&&& 需要同步修改下方的 loss.kio、loss.min
+    % 否则第二轮给 loss(1) 加新字段时与 loss(2..n) 字段不一致会报错（D1 同类）
+    one0 = struct('ai', NaN, 'lit', NaN, 'alay', [], 'aj', [], ...
+                  'ch', struct('sub',NaN,'n',NaN,'act',NaN,'p',NaN,'contact',NaN));
+    for j = 1:numel(modes)
+        loss(j).kio = one0;
+        loss(j).min = one0;
+    end
+
+    for is = 1:numel(scen)
+        [Mx, tabx] = stage2_alpha_table(lambda, pol, scen{is});
+        STAGE2_ALPHA = Mx;                                          % 获取吸收系数
+        Lx  = stage2_build_stack(stack_name, lambda);               % 层结构重建(将吸收系数注入层结构)
+        Sx  = stage2_solve_modes(Lx, lambda, pol, n_modes, opts);   % 复折射率模式求解
+        alx = stage2_alpha_by_tag(Lx, tabx);                        % 根据层结构获取对齐的损耗数值，用于后续计算和赋值
+                                                                
+        nrx = real([Lx.n]);
+        for j = 1:numel(modes)
+            one = struct('ai', NaN, 'lit', NaN, 'alay', alx, 'aj', nan(1, numel(Lx)), ...
+                         'ch', struct('sub',NaN,'n',NaN,'act',NaN,'p',NaN,'contact',NaN));
+            if j <= numel(Sx) && Sx(j).ok
+                Pl = modes(j).P_layer(:).';                         % 实部求解得到的各层功率占比
+                w  = Pl .* nrx / real(modes(j).n_eff);              % 严格微扰权重
+                one.aj  = w .* alx;                                 % 层分解，求各层对应模场分布的损耗系数
+                one.ai  = 2*k0*imag(Sx(j).ne)*1e4;                  % 等效折射率虚部
+                one.lit = sum(Pl .* alx);                           % 忽略折射率修正，各层损耗及功率占比求和总损耗
+                                                                    % 与ai 比较，作为自检
+                one.ch  = stage2_channels(one.aj, {Lx.tag});        % 层损耗总结为四通道
+            end
+            loss(j).(scen{is}) = one;
+        end
+
+
+        fprintf('\n── 损耗（场景 %s，%.0f nm，%s）──\n', sno{is}, lambda*1000, pol);
+        for j = 1:numel(modes)
+            fprintf('%s%d : α_i = %8.3f cm^-1   （字面 ΣP·α = %8.3f）   [n 侧 %6.3f / 有源 %6.3f / p 侧 %6.3f / 衬底 %6.3f]\n', ...
+                pol, j-1, loss(j).(scen{is}).ai, loss(j).(scen{is}).lit, ...
+                loss(j).(scen{is}).ch.n, loss(j).(scen{is}).ch.act, ...
+                loss(j).(scen{is}).ch.p, loss(j).(scen{is}).ch.sub);
+        end
+    end
+
+    for j = 1:numel(modes)
+        modes(j).loss = loss(j);                                    % 将损耗挂到模型输出上
+    end
+    STAGE2_ALPHA = [];                                              % 清表，后面自检/图只走几何量
     
     %% 输出 删除原命令行输出，调整为表格输出；保留自检。后续可添加 UI。        
 
@@ -173,7 +252,7 @@ function modes = Model_Self_L2_7L_EBL(action)
     fprintf('\n── 说明 ──\n');
     fprintf('可求解的模式个数: %d \n', find_date.ModeNum);
 
-    %% 绘图
+    %% 绘图1 —— 波导模场、远场
     % 画一个三维的脊形波导示意图 （→ UI ?）
     % 画一个面向光束的x-y的模场分布
 
@@ -195,6 +274,7 @@ function modes = Model_Self_L2_7L_EBL(action)
 
     % 根据 do_save 决定图窗是否显示
     if do_save, vis = 'off'; else, vis = 'on'; end
+
     fig1 = figure('Visible', vis, 'Position', [60 40 1040 760], ...
                  'Name', 'GaN LD slab waveguide', 'Color', 'w');
     
@@ -209,8 +289,6 @@ function modes = Model_Self_L2_7L_EBL(action)
     draw_stack(ax2, modes(1).y, real(modes(1).n_y), modes, yb, L, ...
                xr_zoom, 'northeast', pol);
     title(ax2, 'Zoom on the core:  n-wave / QW / p-wave / EBL');
-
-
 
     % 图二：快轴远场角分布
     fig2 = figure('Visible', vis, 'Position', [120 80 900 420], ...
@@ -251,18 +329,18 @@ function modes = Model_Self_L2_7L_EBL(action)
    
     scr  = get(groot, 'ScreenSize');                   % [1 1 屏宽 屏高]，像素
     w3   = min(1500, scr(3) - 60);                     % 窗口宽：上限 1500 px，且不出屏
-    rowH = 32;                                         % 单行高 [px]（FontSize 16 约 28，留余量）
+    rowH = 28;                                         % 单行高 [px]（FontSize 16 实测约 26，留 2 px 余量）
     gap  = 26;                                         % 两块表的间隙 [px]
     mar  = 14;                                         % 窗口内边距 [px]
-    hT1  = (numel(modes) + 1) * rowH + 10;             % 表一高：数据行 + 表头
-    hT2  = (N + 1)           * rowH + 10;              % 表二高：数据行 + 表头
+    hT1  = (numel(modes) + 1) * rowH + 8;              % 表一高：数据行 + 表头
+    hT2  = (N + 1)           * rowH + 8;               % 表二高：数据行 + 表头
 
     fig3 = figure('Visible', vis, 'Name', 'GaN LD - data tables', 'Color', 'w');
     fig3.InnerPosition = [30 60 w3, hT1 + hT2 + gap + 2*mar];    % 直接定客户区，免估标题栏
 
-    % 表一：纵轴：模式;  横轴：n_eff, beta, Γ, theta_FWHM, 峰值角, 归一化自检数
+    % 表一：纵轴：模式;  横轴：n_eff, beta, Γ, theta_FWHM, 峰值角, 损耗,归一化自检数
     mCols = {'mode', 'n_eff', 'beta [1/um]', 'Gamma', ...
-             'FWHM [deg]', 'peak [deg]', 'norm check'};
+             'FWHM [deg]', 'peak [deg]', 'alpha_i KIO', 'alpha_i MIN', 'norm check'};
     mData = cell(numel(modes), numel(mCols));
     for k = 1:numel(modes)
         mData(k, :) = { sprintf('%s%d', pol, k-1), ...
@@ -271,6 +349,8 @@ function modes = Model_Self_L2_7L_EBL(action)
                         sprintf('%.6f', modes(k).Gamma), ...
                         sprintf('%.2f',   modes(k).ff.fwhm*180/pi), ...
                         sprintf('%.2f',   modes(k).ff.th_pk*180/pi), ...
+                        sprintf('%.3f',   modes(k).loss.kio.ai), ...
+                        sprintf('%.3f',   modes(k).loss.min.ai), ...
                         sprintf('%.3e',   modes(k).norm_val) };
     end
     t1 = uitable(fig3, 'Data', mData, 'ColumnName', mCols, 'FontSize', 16, ...
@@ -280,7 +360,8 @@ function modes = Model_Self_L2_7L_EBL(action)
     % 表二： 纵轴：层;  横轴：厚度，折射率，各个模式的功率占比，损耗贡献
     lCols = [{'#', 'tag', 'd [um]', 'n'}, ...
              arrayfun(@(j) sprintf('P(%s%d) [%%]', pol, j-1), ...
-                      1:numel(modes), 'UniformOutput', false)];
+                      1:numel(modes), 'UniformOutput', false), ...
+             {'alpha KIO', 'alpha MIN'}];
     lData = cell(N, numel(lCols));
     for k = 1:N
         dstr = 'Inf';
@@ -289,6 +370,9 @@ function modes = Model_Self_L2_7L_EBL(action)
         for j = 1:numel(modes)
             lData{k, 4+j} = sprintf('%.4f', 100*modes(j).P_layer(k));
         end
+        % !! 阶段2 A 步：逐层 α_j
+        lData{k, 4+numel(modes)+1} = sprintf('%.3f', modes(1).loss.kio.alay(k));
+        lData{k, 4+numel(modes)+2} = sprintf('%.3f', modes(1).loss.min.alay(k));
     end
     t2 = uitable(fig3, 'Data', lData, 'ColumnName', lCols, 'FontSize', 16, ...
                  'Units', 'pixels');
@@ -297,6 +381,35 @@ function modes = Model_Self_L2_7L_EBL(action)
     relayout_tables(fig3, t1, t2, mCols, lCols);
     fig3.SizeChangedFcn = @(s, ~) relayout_tables(s, t1, t2, mCols, lCols);
 
+
+    %% 绘图2 —— 损耗分解（三维方块 + 堆叠条）
+    % 仅看纵向数值，层深(即x-y平面的数值)无意义
+    fig4 = figure('Visible', vis, 'Name', 'GaN LD - loss decomposition', 'Color', 'w', ...
+                  'Position', [60 60 980 940]);
+    S4 = struct();
+    S4.modes = modes;
+    S4.pol   = pol;
+    S4.tag   = {L.tag};
+    S4.d     = [L.d];
+    S4.scen  = {'kio', 'min'};
+    S4.sn    = {'KIO', 'MIN'};
+    uicontrol(fig4, 'Style', 'text', 'String', 'mode', 'Units', 'pixels', ...
+              'Position', [20 896 60 24], 'FontSize', 10, 'BackgroundColor', 'w');
+    S4.pmMode = uicontrol(fig4, 'Style', 'popupmenu', 'Units', 'pixels', ...
+              'Position', [78 896 130 26], 'FontSize', 10, ...
+              'String', arrayfun(@(j) sprintf('%s%d', pol, j-1), 1:numel(modes), ...
+                                 'UniformOutput', false), ...
+              'Value', 1, 'Callback', @(s, ~) draw_loss3d(fig4));
+    uicontrol(fig4, 'Style', 'text', 'String', 'scenario', 'Units', 'pixels', ...
+              'Position', [240 896 70 24], 'FontSize', 10, 'BackgroundColor', 'w');
+    S4.pmScen = uicontrol(fig4, 'Style', 'popupmenu', 'Units', 'pixels', ...
+              'Position', [318 896 110 26], 'FontSize', 10, ...
+              'String', {'KIO', 'MIN'}, 'Value', 1, ...
+              'Callback', @(s, ~) draw_loss3d(fig4));
+    S4.ax  = axes(fig4, 'Units', 'pixels', 'Position', [70 470 560 400]);
+    S4.axb = axes(fig4, 'Units', 'pixels', 'Position', [85 70 540 330]);
+    fig4.UserData = S4;
+    draw_loss3d(fig4);
 
     %% 保存 
     if do_save
@@ -597,7 +710,7 @@ function [roots_n, info] = find_roots_complex(fun, n_lo, n_hi, n_roots, opts)
     else
         [roots_n, chk, cand_all] = scan_newton(fun, xs, fs, opts);  % 牛顿法（含后验检查）
         info.mode = 'complex';
-        info.cand = cand_all;                                       % 阶段2 S4：逐候选记录（被拒的也在）
+        info.cand = cand_all;                                       % 逐候选记录（被拒的也在）
     end
     
     % 去重、降序、（第一次）截断、剔除不合格的根
@@ -678,31 +791,35 @@ end
 % 函数：复折射率求解
 % 输入：函数 dispersion_tmm(输出转移矩阵结果); 所有待测的n_eff xs(向量); 
 %      待测n_eff的转移矩阵输出 fs; 求解要用参数 opts
-% 输出：roots_n: 满足条件的n_eff; chk: ; cand_all:
-% 调用函数：newton_complex, stage2_empty_check [用于数据记录 (→ 后验检查) 的空数组]
+% 输出：roots_n: 满足条件的复折射率; 
+%      chk: 结构体数组(参考 stage2_empty_check)，仅记录经过后验的 n 的检测数据; 
+%      cand_all:结构体数组(同样),记录所有备选 n 的检测数据
+% 调用函数：newton_complex(输出：经检查后的元素 r，和关联r的结构体 c), 
+%          stage2_empty_check [用于数据记录 (→ 后验检查) 的空数组]
 % 说明：
-%   本函数用于复折射率
+%   1.本函数用于复折射率
+%   2.在matlab中，数组作为参量输入到函数，但是函数是依次取元素的，也就是说函数
+%       内部只获取了一个元素而非一整个向量。
 % ───────────────────────────────────────────────────────────────────────────────────
 function [roots_n, chk, cand_all] = scan_newton(fun, xs, fs, opts)
-    %SCAN_NEWTON  复值分支：定位 |f| 的局部极小，再用复数牛顿细化
-    mag = abs(fs);                      % 取模，而不是取绝对值。
+    mag = abs(fs);                              % 取模，而不是取绝对值。
     cand = [];
 
-    % 选取局部的谷，作为备选的迭代初值
+    % 选取局部的谷(极小)，作为备选的迭代初值
     % f(z)=0 → |f(z)=0|  →  在离散点中，邻近点数值小于其边上两点的数值
     for j = 2:numel(xs)-1
         if mag(j) < mag(j-1) && mag(j) <= mag(j+1)
-            cand(end+1) = xs(j);        %#ok<AGROW>
+            cand(end+1) = xs(j);                %#ok<AGROW>
         end
     end
 
     roots_n  = [];
     chk      = stage2_empty_check();
     cand_all = stage2_empty_check();
-    for x0 = cand
+    for x0 = cand                               % x0 是复折射率
         [r, c] = newton_complex(fun, x0, opts);
         c.x0 = x0;
-        cand_all(end+1) = c;                    %#ok<AGROW>  % 全部候选都留记录
+        cand_all(end+1) = c;                    %#ok<AGROW> 
         if ~isempty(r)
             roots_n(end+1) = r;                 %#ok<AGROW>
             chk(end+1)     = c;                 %#ok<AGROW>
@@ -713,17 +830,23 @@ end
 
 % ───────────────────────────────────────────────────────────────────────────────────
 % 函数：牛顿法求解
-% 输入：函数 dispersion_tmm(输出转移矩阵结果); 待迭代的复折射率 x0(向量); 求解要用参数 opts
-% 输出：roots_n: 满足条件的n_eff; chk: ; cand_all:
+% 输入：函数 dispersion_tmm(输出转移矩阵结果); 待迭代的复折射率 x0; 求解要用参数 opts
+% 输出：元素r。对x0操作，满足对应元素仍保留，不满足为空[]; 
+%       chk: 结构体
+%       chk.fr            复折射率代入dispersion_tmm后，其结果的模，|fun(r)|
+%       chk.nb            八邻域中的最小值
+%       chk.ratio         fr/max(nb,)
+%       chk.accepted      条件判定: fr 需小于门限 且 ratio<=预设比例
 % 调用函数：newton_complex, stage2_check_one 
 % 说明：
 %   1.f(z_k + \delta) \approx f(z_k)+f'(z_k)\delta, \delta = - [ f(z_k) / f'(z_k)]
 %       z_(k+1) = z_k + \delta
-%   2.&& 设置了步长阻尼，可以在opts额外设置参数
+%   2.&&& 设置了步长阻尼，可以在opts额外设置参数
+%   3.因为只获取了一个元素(虽然输入是向量，但是函数本身只对一个其中元素操作)，所以当
+%       当前元素不符合迭代要求时，是 return 对下一元素进行验证，而不是 break 退出循环。
 % ───────────────────────────────────────────────────────────────────────────────────
 function [r, chk] = newton_complex(fun, x0, opts)
-    %NEWTON_COMPLEX  复数牛顿迭代，带步长阻尼。无法收敛时返回空。
-    h      = 1e-7;                       % 用于求导的步长
+    h      = 1e-7;                          % 用于求导的步长
     r      = x0;
     n_iter = opts.maxit;
 
@@ -733,7 +856,8 @@ function [r, chk] = newton_complex(fun, x0, opts)
         f1 = fun(r + h);
         f2 = fun(r - h);
         df = (f1 - f2) / (2*h);
-
+        
+        % 无意义，记录该点，然后退出
         if abs(df) < 1e-300
             chk = stage2_check_one(fun, r, opts);
             r = [];
@@ -746,18 +870,18 @@ function [r, chk] = newton_complex(fun, x0, opts)
         end
         r = r - step;
         
-        % 迭代步长小于一定值，退出记录(还需后验检查)
+        % 迭代步长小于一定值，退出循环，记录(还需后验检查)
         if abs(step) < 1e-14 * max(1, abs(r))
             break;
         end
+        % 达到迭代最大次数仍未收敛，丢弃
         if it == n_iter
             chk = stage2_check_one(fun, r, opts);
-            r = [];                        % 未收敛，丢弃
+            r = [];                        
             return
         end
     end
 
-    % 阶段2 S4：后验检查（多尺度邻域，逐根记录 |f(r)|、邻域最小值、比值、判定）
     chk = stage2_check_one(fun, r, opts);
     if ~chk.accepted
         r = [];
@@ -939,7 +1063,7 @@ end
 %       detail：结构体
 %           detail.P_act    有源区总功率
 %           detail.P_tot    激光器总功率
-%           detail.P_layer  各层功率(向量)
+%           detail.P_layer  各层功率(向量)占比
 % 说明：
 %   1.口径需要统一。
 %   2.本函数：全部 is_active 层的并集; 无穷积分
@@ -1204,32 +1328,60 @@ end
 %   3.常量 rowH / gap / mar 须与制表段保持一致。
 % ───────────────────────────────────────────────────────────────────────────────────
 function relayout_tables(fig, t1, t2, mCols, lCols)
-    rowH = 32;                                         % 单行高 [px]，与制表段同值
+    rowH = 28;                                         % 单行高 [px]，与制表段同值
     gap  = 26;                                         % 两表间隙 [px]
     mar  = 14;                                         % 窗口内边距 [px]
 
     wp  = get(fig, 'InnerPosition');                   % 客户区当前几何
     w   = wp(3);
-    h1  = (size(get(t1, 'Data'), 1) + 1) * rowH + 10;  % 表一高：数据行 + 表头
-    h2  = (size(get(t2, 'Data'), 1) + 1) * rowH + 10;
-    cw1 = floor((w - 2*mar) / numel(mCols));           % 每列宽 = 可用宽 / 列数
-    cw2 = floor((w - 2*mar) / numel(lCols));
+    h1  = (size(get(t1, 'Data'), 1) + 1) * rowH + 8;   % 表一高：数据行 + 表头
+    h2  = (size(get(t2, 'Data'), 1) + 1) * rowH + 8;
 
-    set(t1, 'ColumnWidth', num2cell(repmat(cw1, 1, numel(mCols))), ...
+    gut = 46;
+    cw1 = col_widths(mCols, get(t1, 'Data'), w - 2*mar - gut, 16);
+    cw2 = col_widths(lCols, get(t2, 'Data'), w - 2*mar - gut, 16);
+
+    set(t1, 'ColumnWidth', num2cell(cw1), ...
             'Position',    [mar, 2*mar + h2 + gap, w - 2*mar, h1]);
-    set(t2, 'ColumnWidth', num2cell(repmat(cw2, 1, numel(lCols))), ...
+    set(t2, 'ColumnWidth', num2cell(cw2), ...
             'Position',    [mar, mar,               w - 2*mar, h2]);
+end
+
+% ───────────────────────────────────────────────────────────────────────────────────
+% 函数：col_widths（按内容算列宽，再等比缩放到可用宽度）
+% 输入：cols：列名 cell; data：uitable 的 Data; avail：可用宽度 [px]; fs：字号 [pt]
+% 输出：cw：各列宽 [px]
+% 说明：
+%   1.每列宽 = 最长内容字符数 × 0.72×字号 + 18 px 余量（FontSize 16 实测约 11 px/字符）；
+%   2.始终按 avail/sum(need) 整体缩放——放大也缩，铺满整行；
+%     若只放大不缩、再把余量塞给最后一列，最后一列会变超宽（第一版就是这样）；
+%   3.舍入差给第一列，不塞给最后一列。
+% ───────────────────────────────────────────────────────────────────────────────────
+function cw = col_widths(cols, data, avail, fs)
+    n    = numel(cols);
+    need = zeros(1, n);
+    for k = 1:n
+        Lk = numel(cols{k});
+        for r = 1:size(data, 1)
+            v = data{r, k};
+            if ischar(v), Lk = max(Lk, numel(v)); end
+        end
+        need(k) = Lk * 0.72*fs + 18;
+    end
+    need = max(need, 50);
+    cw   = floor(need * (avail/sum(need)));
+    cw(1) = cw(1) + (avail - sum(cw));
 end
 
 % ───────────────────────────────────────────────────────────────────────────────────
 % 函数：波长赋值
 % 输入：无
-% 输出：lambda：真空波长 [μm]
+% 输出：lambda [μm]
 % 说明：
 %   1.阶段2 规定 λ 只在这里改；改这一行即换波长，别处不许再出现 0.45。
 %   2.!! 405/520 nm 的 n(λ) 与 α(λ) 在《阶段2 施工单》§九 里明确"无可引用来源"，
 %     换波长时实部仍取 450 nm 表（n450_of_tag），结论只能写"仅限几何/趋势"。
-%   3.本函数是为了减少后续波长的连续调用和赋值（到损耗那段再看看 &&）
+%   3.本函数是为了减少后续波长的连续调用和赋值（到损耗那段再看看 &&&）
 % ───────────────────────────────────────────────────────────────────────────────────
 function lambda = stage2_lambda()
     lambda = 0.45;             
@@ -1237,9 +1389,9 @@ end
 
 % ───────────────────────────────────────────────────────────────────────────────────
 % 函数：复折射率赋值
-% 输入：lambda：真空波长 [μm]; tags：层名 cell（长度 = 层数）
+% 输入：lambda [μm]; tags：层名 cell（长度 = 层数）
 % 输出：nv：与 tags 等长的复折射率行向量
-% 调用函数：n450_of_tag，alpha_of_layer
+% 调用函数：n450_of_tag(实折射率)，alpha_of_layer（折射率虚部）
 % 说明：
 %   1.实部+虚部
 %   2.Im(n) > 0 表示【损耗】，与 build_layers 的 imag(n) >= 0 断言同向。
@@ -1287,15 +1439,16 @@ end
 
 % ───────────────────────────────────────────────────────────────────────────────────
 % 函数：逐层吸收系数 α [cm⁻¹]
-% 输入：tag：层名(字符串); lambda：真空波长 [μm]
+% 输入：tag：层名(字符串); lambda [μm]
 % 输出：a：该层吸收系数 [cm⁻¹]
 % 说明：
 %   1.由全局 containers.Map 进行赋值。
 %   2.使用 Map，是因为 Struct 不允许使用'-'作为字段名。
 %       STAGE2_ALPHA = containers.Map({'QW'}, {10});
-%   3.containers.Map(keys,value)：key=层名，value=α [cm^-1]；空表示默认 0。键区分大小写
+%   3.containers.Map(keys,value)：key=层名，value=吸收系数 α [cm^-1]; 
+%     空表示默认 0。键区分大小写
 %   4.未使用 lambda，作为预留接口。
-%   5.&& 加层时，需要对 known 同步修改。
+%   5.&&& 加层时，需要对 known 同步修改。
 % ───────────────────────────────────────────────────────────────────────────────────
 function a = alpha_of_layer(tag, lambda) %#ok<INUSD>
     global STAGE2_ALPHA
@@ -1307,7 +1460,7 @@ function a = alpha_of_layer(tag, lambda) %#ok<INUSD>
     % isa(A,className)，变量类型判断;  
     % isKey，只适用于 containers.Map，判断 Map 里是否有该键。
     if ~isempty(STAGE2_ALPHA) && isa(STAGE2_ALPHA, 'containers.Map') && isKey(STAGE2_ALPHA, tag)
-        a = STAGE2_ALPHA(tag);          % 阶段2 S3–S7：测试/扫描注入
+        a = STAGE2_ALPHA(tag);          % 扫描，注入损耗
     else
         a = 0;                          % 默认无吸收
     end
@@ -1321,7 +1474,7 @@ end
 %   1.带损耗时 n 为复数，sqrt 取主值只保证 Re ≥ 0，Re = 0 时 Im 的符号无保证；
 %   2.Re = 0 且 Im < 0 的分支等价于场向外增长，必须取反。
 %   3.该保护在无损耗时恒不触发。
-%   4.半无限层衰减常数的分支选择
+%   4.半无限层衰减系数的分支选择。
 % ───────────────────────────────────────────────────────────────────────────────────
 function g = BranchChoose_decay(g)
     flip = real(g) < 0 | (real(g) == 0 & imag(g) < 0);
@@ -1329,38 +1482,38 @@ function g = BranchChoose_decay(g)
 end
 
 % ───────────────────────────────────────────────────────────────────────────────────
-% 函数：单根后验检查
-% 输入：fun：色散函数; r：待检查的根; opts：需 chk_ratio（判定阈值）、chk_h（尺度序列）
+% 函数：单根的后验检查
+% 输入：函数 dispersion_tmm(输出转移矩阵结果); 待检查的根 r; 求解要用参数 opts    
 % 输出：c：结构体
-%       c.fr=|f(r)|、
-%       c.nb=邻域最小值、
-%       c.ratio=fr/nb、
-%       c.accepted=判定
+%       c.fr            复折射率代入dispersion_tmm后，其结果的模，|fun(r)|
+%       c.nb            八邻域中的最小值
+%       c.ratio         fr/max(nb,)
+%       c.accepted      条件判定: fr 需小于门限 且 ratio<=预设比例
 % 说明：
-%   1.原检查只取 1e-3 一个尺度，且与邻域最大值比较：盆底很平的非零极小（伪根）
-%     在 1e-3 外 |f| 已经长大，"看起来像根"而被放过。
-%   2.改为 1e-3…1e-8 六个尺度 × 8 个方向取最小值：真根的 |f| 随步长线性趋零，
-%     伪根在盆底附近 |f| 基本不变 ⇒ ratio ≈ 1，被拒。
-%   3.ratio 记录进 info.checks，是 B2 的验收把手。
-%   4.阶段2 S6 补绝对残差门限 fr <= chk_res·fscale：单靠 ratio 会放过
-%     "陡峭函数的非零局部极小"（S6 第三段 d=5 的反例：|f|=33 仍被判为根）。
+%   1.对于非零极小伪根的判断：从 1e-3…1e-8 六个尺度 × 8 个方向取最小值——真根的 
+%     |f| 随步长线性趋零，伪根在盆底附近 |f| 基本不变 ⇒ ratio ≈ 1，被拒。只取 
+%     1e-3 一个尺度不严谨。
+%   2.&&& ratio 记录进 info.checks，是 B2 的验收把手。
+%   3.判据: 绝对阈值和相对陡度。
+%   4.realmin, matlab的内置的最小正正规数, 2.2251e-308.
 % ───────────────────────────────────────────────────────────────────────────────────
 function c = stage2_check_one(fun, r, opts)
     if ~isfield(opts, 'chk_ratio'), opts.chk_ratio = 0.5;  end
     if ~isfield(opts, 'chk_h'),     opts.chk_h     = 10.^-(3:8); end
-    if ~isfield(opts, 'chk_res'),   opts.chk_res   = 1e-6; end   % 阶段2 S6：绝对残差门限（相对 fscale）
+    if ~isfield(opts, 'chk_res'),   opts.chk_res   = 1e-6; end   % 绝对残差门限（相对 fscale）
 
     fr = abs(fun(r));
     nb = inf;
     for h = opts.chk_h * max(1, abs(r))
         for th = (0:7) * pi/4
             v = abs(fun(r + h * exp(1i*th)));
-            if v < nb, nb = v; end
+            if v < nb
+                nb = v;
+            end
         end
     end
 
-    % 阶段2 S6 补：只比 ratio 会放过"陡峭函数的非零局部极小"（|f| 是深坑但不是零），
-    % 必须再加一条绝对残差门限：|f(r)| 相对扫描段最大值要小到 chk_res 量级。
+    % 不能只比 ratio，会放过"陡峭函数的非零局部极小"，必须再加一条绝对残差门限
     if isfield(opts, 'chk_fscale')
         rmax = opts.chk_res * opts.chk_fscale;
     else
@@ -1491,13 +1644,13 @@ end
 % ───────────────────────────────────────────────────────────────────────────────────
 % 函数：用于后验记录的空 struct 数组
 % 输入：无
-% 输出：chk：0×1 的空 struct 数组
+% 输出：chk：0×1 的空 struct 数组 (参考 stage2_check_one)
 %           chk.fr
 %           chk.nb
 %           chk.ratio
 %           chk.rmax
 %           chk.accepted
-%           chk.x0
+%           chk.x0          原本的复折射率值
 % 说明：
 %   1.struct 数组不能从 [] 起步（[] 是 double，end+1 赋值报"无法从 struct 转换为 double"，
 %     坑记录 D1 同类）；必须用带字段的空 struct 起手。
@@ -1508,453 +1661,15 @@ function chk = stage2_empty_check()
 end
 
 % ───────────────────────────────────────────────────────────────────────────────────
-% 函数：stage2_s5_perturbation（S5 微扰标尺：B1 弱吸收极限 / B2 根后验 / B3 多通道叠加）
-% 输入：无
-% 输出：out：结构体，含 B1/B2/B3 的判据值与 pass 标志
-% 调用函数：stack_7layer，layer_bounds，dispersion_tmm，find_roots_complex，
-%           mode_profile，normalize_mode，confinement_factor，alpha_of_layer
+% 函数：系数f的四阶多项式取值
+% 输入：a：系数向量，a(1)=a0 … a(5)=a4; x：λ[nm]
+% 输出：v：多项式的值
 % 说明：
-%   1.B1：逐层单独赋 α_j ∈ {1,3,10} cm⁻¹，α_mode/α_j 与 P_layer(j) 比较；
-%   2.严格一阶微扰给的是 α_mode = α_j·P_j·n_rj/Re(n_eff)（S3 全层同 α 实测已证实），
-%     故同时给"朴素判据"（对 P_j）与"严格判据"（对 P_j·n_rj/n_eff）；
-%   3.B3：多层同时赋 α（各 ≤10），与 Σ_j P_j α_j 及严格式比较；
-%   4.全程 TE、7 层、450 nm；α 通过全局表 STAGE2_ALPHA 注入，函数退出时清空。
+%   1.采取 Horner 形式: P(x)=a0+a1x+a2x^2+a3x^3+a4x^4
+%                          =a0+x(a1+x(a2+x(a3+xa4)))
+%   下面这个，避免放大误差——x^4 在 680 nm 处的舍入放大。
 % ───────────────────────────────────────────────────────────────────────────────────
-function out = stage2_s5_perturbation()
-    global STAGE2_ALPHA
-
-    lambda = stage2_lambda();
-    k0     = 2*pi/lambda;
-    pol    = 'TE';
-    opts   = struct('num_scan', 2e4, 'tol', 1e-13, 'maxit', 200, 'merge', 1e-6, ...
-                    'npts', 800, 'tail_dec', 20, 'tail_max', 50, 'num_ff', 2001, ...
-                    'chk_ratio', 0.5, 'chk_h', 10.^-(3:8));
-
-    L  = stack_7layer(lambda);
-    N  = numel(L);
-    yb = layer_bounds(L);
-    n_max = max(real([L.n]));
-    tiny  = 1e-9 * max(1, n_max);
-    n_lo  = max(real(L(1).n), real(L(N).n)) + tiny;
-    n_hi  = n_max - tiny;
-    fh    = @(x) dispersion_tmm(x, L, lambda, pol);
-    tags  = {L.tag};
-
-    % ── 基准：全层无吸收 ──
-    STAGE2_ALPHA = [];
-    [ne0, G0, P0, ck0] = stage2_s5_solve_te0(fh, L, lambda, pol, opts, yb, n_lo, n_hi);
-    nr0 = real(ne0);
-    a0  = 2*k0*imag(ne0)*1e4;
-
-    fprintf('\n===== S5 基准（全层无吸收）=====\n');
-    fprintf('Re(n_eff)=%.12f  Im(n_eff)=%.3e  Γ=%.9f  α_mode=%.3e cm^-1\n', ...
-        nr0, imag(ne0), G0, a0);
-    fprintf('ΣP_layer-1 = %.3e   根后验 max ratio = %.3e\n', sum(P0)-1, max([ck0.ratio]));
-
-    % ── B1：逐层单独赋 α ──
-    alist = [1 3 10];
-    nb1   = numel(tags) * numel(alist);
-    b1 = struct('tag', {}, 'nr', {}, 'P', {}, 'alpha', {}, 'a_mode', {}, ...
-                'ratio', {}, 'rel_naive', {}, 'rel_strict', {}, 'ok_root', {});
-    k = 0;
-    for j = 1:numel(tags)
-        for a = alist
-            k = k + 1;
-            STAGE2_ALPHA = containers.Map({tags{j}}, {a});
-            % 注意：层折射率是在 stack_* 里一次性算好的，改 α 后必须重建层结构，
-            % 否则拿到的还是上一轮的 n（S5 首跑 α_mode 恒 0 就是这个原因）。
-            L  = stack_7layer(lambda);
-            fh = @(x) dispersion_tmm(x, L, lambda, pol);
-            [ne, ~, Pl, ck] = stage2_s5_solve_te0(fh, L, lambda, pol, opts, yb, n_lo, n_hi);
-            am = 2*k0*imag(ne)*1e4;
-            b1(k).tag        = tags{j};
-            b1(k).nr         = real(n450_of_tag(tags{j}));
-            b1(k).P          = P0(j);
-            b1(k).alpha      = a;
-            b1(k).a_mode     = am;
-            b1(k).ratio      = am / a;
-            b1(k).rel_naive  = abs(am/a / max(P0(j), realmin) - 1);
-            b1(k).rel_strict = abs(am/a / max(P0(j)*b1(k).nr/nr0, realmin) - 1);
-            b1(k).ok_root    = all([ck.ratio] < opts.chk_ratio);
-        end
-    end
-    STAGE2_ALPHA = [];
-
-    fprintf('\n===== B1 逐层弱吸收（TE0，450 nm）=====\n');
-    fprintf('%-10s %4s %12s %12s %12s %10s %10s %10s\n', ...
-        '层', 'α', 'α_mode', 'α_mode/α', 'n_r/n_eff', 'rel_朴素', 'rel_严格', '根ok');
-    for k = 1:nb1
-        fprintf('%-10s %4g %12.4e %12.6e %12.6f %10.2e %10.2e %10d\n', ...
-            b1(k).tag, b1(k).alpha, b1(k).a_mode, b1(k).ratio, ...
-            b1(k).nr/nr0, b1(k).rel_naive, b1(k).rel_strict, b1(k).ok_root);
-    end
-
-    % 单层内非线性度：α=10 与 α=1 的单位 α 衰减之比
-    fprintf('\n-- B1 线性度（同层 α=10 与 α=1 的单位 α 衰减之比，理想 = 1）--\n');
-    nl_max = 0;
-    for j = 1:numel(tags)
-        idx = find(strcmp({b1.tag}, tags{j}));
-        r1  = b1(idx(1)).ratio;   r10 = b1(idx(end)).ratio;
-        nl  = abs(r10/r1 - 1);
-        nl_max = max(nl_max, nl);
-        fprintf('%-10s  ratio(1)=%.6e  ratio(10)=%.6e  非线性度=%.3e\n', ...
-            tags{j}, r1, r10, nl);
-    end
-
-    rel_naive_max  = max([b1.rel_naive]);
-    rel_strict_max = max([b1.rel_strict]);
-    b1_pass = (rel_strict_max < 1e-2) && (nl_max < 1e-2) && all([b1.ok_root]);
-
-    % ── B3：多通道叠加 ──
-    multi_tags = {'n-clad', 'n-wave', 'QW', 'p-wave', 'EBL', 'p-clad'};
-    multi_a    = [3, 5, 10, 4, 2, 6];      % cm^-1，各 ≤10
-    STAGE2_ALPHA = containers.Map(multi_tags, num2cell(multi_a));
-    L   = stack_7layer(lambda);                       % 同上：改 α 后重建层结构
-    fh  = @(x) dispersion_tmm(x, L, lambda, pol);
-    [ne3, ~, Pl3, ck3] = stage2_s5_solve_te0(fh, L, lambda, pol, opts, yb, n_lo, n_hi);
-    STAGE2_ALPHA = [];
-
-    am3      = 2*k0*imag(ne3)*1e4;
-    pred_sum = 0;  pred_strict = 0;
-    for m = 1:numel(multi_tags)
-        jj = find(strcmp(tags, multi_tags{m}));
-        pred_sum    = pred_sum    + P0(jj)*multi_a(m);
-        pred_strict = pred_strict + P0(jj)*multi_a(m)*real(n450_of_tag(tags{jj}))/nr0;
-    end
-    rel3_sum    = abs(am3/pred_sum - 1);
-    rel3_strict = abs(am3/pred_strict - 1);
-
-    fprintf('\n===== B3 多通道叠加（6 层同时赋 α ≤10）=====\n');
-    for m = 1:numel(multi_tags)
-        jj = find(strcmp(tags, multi_tags{m}));
-        fprintf('%-10s α=%5.1f  P=%10.6f  贡献=%10.4e\n', ...
-            multi_tags{m}, multi_a(m), P0(jj), P0(jj)*multi_a(m));
-    end
-    fprintf('α_mode(实算) = %.6e cm^-1\n', am3);
-    fprintf('ΣP_j α_j       = %.6e  相对偏差 = %.3e\n', pred_sum,    rel3_sum);
-    fprintf('ΣP_j α_j n_rj/n_eff = %.6e  相对偏差 = %.3e\n', pred_strict, rel3_strict);
-    fprintf('根后验 max ratio = %.3e\n', max([ck3.ratio]));
-    b3_pass = (rel3_sum < 2e-2) && all([ck3.ratio] < opts.chk_ratio);
-
-    % ── 汇总 ──
-    out = struct();
-    out.ne0 = ne0; out.Gamma0 = G0; out.P0 = P0; out.alpha0 = a0;
-    out.b1 = b1;
-    out.b1_rel_naive_max  = rel_naive_max;
-    out.b1_rel_strict_max = rel_strict_max;
-    out.b1_nonlin_max     = nl_max;
-    out.b1_pass = b1_pass;
-    out.b3_alpha_mode = am3;
-    out.b3_pred_sum = pred_sum;
-    out.b3_pred_strict = pred_strict;
-    out.b3_rel_sum = rel3_sum;
-    out.b3_rel_strict = rel3_strict;
-    out.b3_pass = b3_pass;
-    out.pass = b1_pass && b3_pass;
-
-    fprintf('\n===== S5 汇总 =====\n');
-    fprintf('B1  max rel(朴素判据) = %.3e   max rel(严格判据) = %.3e   非线性度 = %.3e\n', ...
-        rel_naive_max, rel_strict_max, nl_max);
-    fprintf('B3  rel(ΣP_jα_j) = %.3e   rel(严格式) = %.3e\n', rel3_sum, rel3_strict);
-    fprintf('S5  pass=%d  (B1=%d  B3=%d)\n', out.pass, b1_pass, b3_pass);
-end
-
-% ───────────────────────────────────────────────────────────────────────────────────
-% 函数：stage2_s5_solve_te0（解 TE0：复本征值 + 模场 + Γ + 逐层功率占比）
-% 输入：fh：色散函数; L：层结构; lambda：波长; pol：极化; opts：求解参数;
-%       yb：层边界; n_lo/n_hi：搜索区间
-% 输出：ne：TE0 的 n_eff（可复）; G：Γ; Pl：逐层功率占比; ck：根后验记录
-% 说明：
-%   1.取实部最大的根为 TE0；按实部降序（A1：不能按模排序）。
-%   2.复用主流程的 mode_profile / normalize_mode / confinement_factor，不另立口径。
-% ───────────────────────────────────────────────────────────────────────────────────
-function [ne, G, Pl, ck] = stage2_s5_solve_te0(fh, L, lambda, pol, opts, yb, n_lo, n_hi)
-    [roots_n, info] = find_roots_complex(fh, n_lo, n_hi, 6, opts);
-    assert(~isempty(roots_n), 'stage2_s5_solve_te0: 未找到根');
-    [~, ord] = sort(real(roots_n(:).'), 'descend');
-    ne = roots_n(ord(1));
-
-    [y, E, n_y] = mode_profile(ne, L, lambda, pol, opts);
-    [E, ~]      = normalize_mode(y, E, n_y, pol);
-    [G, det]    = confinement_factor(y, E, n_y, yb, L, pol);
-    Pl          = det.P_layer;
-    if isfield(info, 'checks')
-        ck = info.checks(ord(1));
-    else
-        ck = stage2_check_one(fh, ne, opts);
-    end
-end
-
-% ───────────────────────────────────────────────────────────────────────────────────
-% 函数：stage2_s6_tmm_stability（S6：TMM 数值稳定性）
-% 输入：无
-% 输出：out：结构体，含三段扫描表、失真起点、是否失败
-% 调用函数：stage2_s6_point
-% 说明：
-%   1.第一段按施工单：对称三层（n_core=2.455、n_clad=2.404、d=0.12 μm，取自 n-wave），
-%     三层同赋吸收，α 从 1 扫到 1e5 cm⁻¹，搜根窗口是全窗口；
-%   2.第二段测条件数：d=0.3 μm（仍单模），把搜根窗口收到解析根 ±0.02，
-%     排除"模序错配"，直接看同一个根的精度随 |Im κd| 的变化；
-%   3.第三段是反面对照：d=5 μm（多模），全窗口与窄窗口各跑一次，
-%     用来证明"全窗口下 dn 变大"是多模选错根，不是矩阵病态；
-%   4.误差：dn=|n_tmm−n_解析|、dα=2k0·1e4·|Im(n_tmm)−Im(n_解析)| [cm⁻¹]；
-%   5."找不到根"与"精度失真"分开记：前者是求解窗口问题，不是矩阵条件数问题。
-% ───────────────────────────────────────────────────────────────────────────────────
-function out = stage2_s6_tmm_stability()
-    lambda = stage2_lambda();
-    opts   = struct('num_scan', 2e4, 'tol', 1e-13, 'maxit', 300, 'merge', 1e-6, ...
-                    'chk_ratio', 0.5, 'chk_h', 10.^-(3:8));
-    n_core = 2.455;
-    n_clad = 2.404;
-
-    % ── 第一段：施工单规定，d = 0.12 μm，全窗口扫 α ──
-    d1    = 0.12;
-    alist = [0 1 3 10 30 100 300 1e3 3e3 1e4 3e4 6e4 1e5];
-    fprintf('\n===== S6 第一段：d=%.2f μm，全窗口，扫 α =====\n', d1);
-    fprintf('%9s %10s %11s %13s %12s %12s %10s %5s\n', ...
-        'α[cm^-1]', 'α·d', '|Im κd|', 'Re(n_tmm)', 'dn', 'dα[cm^-1]', 'dα/α', '根数');
-    t1 = repmat(stage2_s6_point(n_core, n_clad, d1, 0, lambda, opts), 1, numel(alist));
-    seed = 2.43;
-    for i = 1:numel(alist)
-        t1(i) = stage2_s6_point(n_core, n_clad, d1, alist(i), lambda, opts, [], seed);
-        seed  = t1(i).ne_a;
-        fprintf('%9g %10.3e %11.3e %13.9f %12.3e %12.3e %10.2e %5d\n', ...
-            t1(i).alpha, t1(i).ad, t1(i).kdi, real(t1(i).ne_t), ...
-            t1(i).dn, t1(i).dalpha, t1(i).rel, t1(i).nroots);
-    end
-
-    % ── 第二段：d = 0.3 μm 单模，窄窗口 ±0.02，压 |Im κd| ──
-    d2     = 0.30;
-    win2   = 0.02;
-    alist2 = [100 300 1e3 3e3 1e4 3e4 6e4 1e5 2e5];
-    fprintf('\n===== S6 第二段：d=%.2f μm，窄窗口 ±%.2f，加压 =====\n', d2, win2);
-    fprintf('%9s %10s %11s %13s %12s %12s %10s %9s %5s\n', ...
-        'α[cm^-1]', 'α·d', '|Im κd|', 'Re(n_tmm)', 'dn', 'dα/α', 'cond(M)', 'amp', '根数');
-    t2 = repmat(stage2_s6_point(n_core, n_clad, d2, 0, lambda, opts, win2), 1, numel(alist2));
-    seed = 2.43;
-    for i = 1:numel(alist2)
-        t2(i) = stage2_s6_point(n_core, n_clad, d2, alist2(i), lambda, opts, win2, seed);
-        seed  = t2(i).ne_a;
-        fprintf('%9g %10.3e %11.3e %13.9f %12.3e %12.2e %10.2e %9.2e %5d\n', ...
-            t2(i).alpha, t2(i).ad, t2(i).kdi, real(t2(i).ne_t), ...
-            t2(i).dn, t2(i).rel, t2(i).condM, t2(i).amp, t2(i).nroots);
-    end
-
-    % ── 第三段：反面对照，d=5 μm 多模，全窗口 vs 窄窗口 ──
-    d3 = 5.0;
-    fprintf('\n===== S6 第三段：d=%.1f μm 多模，全窗口 vs 窄窗口 =====\n', d3);
-    fprintf('%9s %10s %11s %13s %12s %12s %5s\n', ...
-        'α[cm^-1]', '窗口', '|Im κd|', 'Re(n_tmm)', 'dn', 'dα/α', '根数');
-    for aa = [100 1e3]
-        rq = stage2_s6_point(n_core, n_clad, d3, aa, lambda, opts);          % 全窗口
-        rs = stage2_s6_point(n_core, n_clad, d3, aa, lambda, opts, 0.02);    % 窄窗口
-        fprintf('%9g %10s %11.3e %13.9f %12.3e %12.2e %5d\n', ...
-            aa, '全', rq.kdi, real(rq.ne_t), rq.dn, rq.rel, rq.nroots);
-        fprintf('%9s %10s %11.3e %13.9f %12.3e %12.2e %5d\n', ...
-            '', '窄', rs.kdi, real(rs.ne_t), rs.dn, rs.rel, rs.nroots);
-    end
-
-    % ── 第四段：真实 7 层 + 文献量级 α（S7 的预演）──
-    global STAGE2_ALPHA
-    k0 = 2*pi/lambda;
-    STAGE2_ALPHA = [];
-    L0  = stack_7layer(lambda);
-    yb0 = layer_bounds(L0);
-    nmx = max(real([L0.n]));
-    w0  = 1e-9*max(1,nmx);
-    lo0 = max(real(L0(1).n), real(L0(end).n)) + w0;
-    hi0 = nmx - w0;
-    fh0 = @(x) dispersion_tmm(x, L0, lambda, 'TE');
-    [neA, GA, PA, ckA] = stage2_s5_solve_te0(fh0, L0, lambda, 'TE', opts, yb0, lo0, hi0);
-
-    STAGE2_ALPHA = containers.Map({'n-clad','p-clad','EBL'}, {36, 18, 36});  % 文献量级，仅作条件数预演
-    L1  = stack_7layer(lambda);
-    fh1 = @(x) dispersion_tmm(x, L1, lambda, 'TE');
-    [neB, GB, PB, ckB] = stage2_s5_solve_te0(fh1, L1, lambda, 'TE', opts, layer_bounds(L1), lo0, hi0);
-    [~, aux] = dispersion_tmm(neB, L1, lambda, 'TE');
-    STAGE2_ALPHA = [];
-
-    fprintf('\n===== S6 第四段：真实 7 层 + 量级 α（n-clad 36 / p-clad 18 / EBL 36 cm⁻¹）=====\n');
-    fprintf('α=0    : Re(n)=%.12f  Γ=%.9f  ΣP−1=%.1e\n', real(neA), GA, abs(sum(PA)-1));
-    fprintf('α≠0    : Re(n)=%.12f  Γ=%.9f  ΣP−1=%.1e  Im(n)=%.9f  α_mode=%.4f cm⁻¹\n', ...
-        real(neB), GB, abs(sum(PB)-1), imag(neA*0+neB), 2*k0*1e4*imag(neB));
-    fprintf('ΔRe(n)=%.3e  ΔΓ=%.3e  cond(M)=%.2f  根后验 max ratio=%.2e\n', ...
-        abs(neB-neA), abs(GB-GA), cond([aux.M(1) aux.M(2); aux.M(3) aux.M(4)]), ...
-        max([ckA.ratio, ckB.ratio]));
-
-    % ── 判定 ──
-    rel1 = [t1.rel];
-    idx1 = find(rel1 > 1e-6, 1, 'first');
-    if isempty(idx1), onset1 = Inf; else, onset1 = alist(idx1); end
-
-    rel2 = [t2.rel];
-    idx2 = find(rel2 > 1e-6, 1, 'first');
-    if isempty(idx2), onset_kd = Inf; else, onset_kd = t2(idx2).kdi; end
-
-    rel_lo = [t1([t1.alpha] <= 100).rel];
-    ok2    = [t2.found];
-    if any(~ok2)
-        fprintf('\n第二段：α = %s 在窄窗口内找不到根\n', mat2str(alist2(~ok2)));
-    end
-
-    fprintf('\n-- 判定 --\n');
-    fprintf('第一段 α≤100：max dα/α = %.3e；α>1e4 全部"找不到根"（求解窗口，不是精度）\n', max(rel_lo));
-    % ## fprintf('第二段：解析参考根处 |f| 最大 %.3e（应≈0，否则参考解不是根）\n', max([t2.res_a]));
-    fprintf('第二段：解析参考根处 |f| 最大 %.3e（未归一化，不能单独据此判根；判根看下两行 ne_t 与 ne_a 的逐位比较）\n', max([t2.res_a]));
-    fprintf('第二段 max |Im κd| = %.3f，失真起点 %s\n', max([t2.kdi]), ...
-        ternary(isinf(onset_kd), '未出现（全段 dα/α ≤ 1e-6）', sprintf('|Im κd| ≈ %.3f', onset_kd)));
-
-    out = struct();
-    out.table1 = t1;  out.table2 = t2;
-    out.onset_alpha = onset1;
-    out.onset_kd    = onset_kd;
-    out.max_rel_lo  = max(rel_lo);
-    out.max_rel_all = max([[t1.rel], [t2.rel]]);
-    out.max_kdi     = max([t2.kdi]);
-    out.n_root_fail = sum(~[t1.found]) + sum(~[t2.found]);
-    out.pass_target = (max(rel_lo) < 1e-6);
-    out.onset       = onset1;
-    out.max_rel_upto_100 = max(rel_lo);
-end
-
-% ───────────────────────────────────────────────────────────────────────────────────
-% 函数：stage2_s6_point（单点：TMM 根 vs 三层解析根）
-% 输入：n_core/n_clad：实折射率; d：芯厚 [μm]; a：吸收 α [cm⁻¹]; lambda; opts
-%        win：可选，搜根窗口半宽（以解析根为中心）；省略则用全窗口
-% 输出：r：结构体
-%       r.ad
-%       r.含 ad、kdi、ne_t、ne_a、dn、dalpha、rel、nroots、found
-% 说明：
-%   1.三层同赋吸收：n = n_r + i·α/(2k0·1e4)；
-%   2.解析根初值固定 2.43，不用 TMM 结果做种子；
-%   3.窄窗口用于排除多模选错根：窗口只含解析根 ± win；
-%   4.found=0 表示 TMM 在窗口内没找到根。
-% ───────────────────────────────────────────────────────────────────────────────────
-% ───────────────────────────────────────────────────────────────────────────────────
-% 函数：stage2_s6_point（单点：TMM 根 vs 三层解析根）
-% 输入：n_core/n_clad：实折射率; d：芯厚 [μm]; a：吸收 α [cm⁻¹]; lambda; opts
-%        win：可选，搜根窗口半宽（以解析根为中心）；省略则用全窗口
-%        seed：可选，解析根的牛顿初值（默认 2.43）
-% 输出：r：结构体
-%       r.ad、kdi、ne_t、ne_a、dn、dalpha、rel、nroots、found
-% 说明：
-%   1.三层同赋吸收：n = n_r + i·α/(2k0·1e4)；
-%   2.解析参考与 TMM 共用同一分支约定：包层 sqrt 经 BranchChoose_decay 强制
-%     Re γ ≥ 0。若这里用未强制的 sqrt，α 一大两者解的就是不同方程，
-%     会把"参考解根本不是根"误判成 TMM 失真；
-%   3.解析根初值默认 2.43，调用方可传上一轮的根做连续化，不拿 TMM 结果做种子；
-%   4.窄窗口用于排除多模选错根；
-%   5.found=0 表示 TMM 在窗口内没找到根。
-% ───────────────────────────────────────────────────────────────────────────────────
-function r = stage2_s6_point(n_core, n_clad, d, a, lambda, opts, win, seed)
-    if nargin < 7, win  = [];  end
-    if nargin < 8, seed = 2.43; end
-
-    k0 = 2*pi/lambda;
-    dl = a/(2*k0*1e4);
-    n1 = complex(n_core, dl);
-    n2 = complex(n_clad, dl);
-
-    L = struct('tag',{},'n',{},'d',{},'is_active',{});
-    L(1) = struct('tag','substrate','n',n2,'d',Inf,'is_active',false);
-    L(2) = struct('tag','core',     'n',n1,'d',d  ,'is_active',true);
-    L(3) = struct('tag','cover',    'n',n2,'d',Inf,'is_active',false);
-
-    % 解析参考（分支约定与 TMM 一致）
-    ga   = @(x) BranchChoose_decay(k0*sqrt(x.^2 - n2^2));
-    cap  = @(x) k0*sqrt(n1.^2 - x.^2);
-    % 用 tan 形式 κ·tan(κd/2) = γ，不用 κd = 2·atan(γ/κ)：
-    % 复参数下 atan 取主值会跳到别的分支，α 一大参考解就和 TMM 解的不是同一个方程。
-    fa   = @(x) cap(x).*tan(cap(x)*d/2) - ga(x);
-    ne_a = stage2_newton_scalar(fa, seed, 300);
-
-    % TMM
-    fh   = @(x) dispersion_tmm(x, L, lambda, 'TE');
-    n_lo = max(real(n2)) + 1e-9;
-    n_hi = real(n1) - 1e-9;
-    if ~isempty(win)
-        n_lo = max(n_lo, real(ne_a) - win);
-        n_hi = min(n_hi, real(ne_a) + win);
-    end
-    ok = true;
-    try
-        roots_n = find_roots_complex(fh, n_lo, n_hi, 3, opts);
-    catch
-        roots_n = [];
-    end
-    if isempty(roots_n)
-        ne_t = NaN; ok = false; nr = 0;
-    else
-        [~, ord] = sort(real(roots_n(:).'), 'descend');
-        ne_t = roots_n(ord(1));
-        nr   = numel(roots_n);
-    end
-
-    kap = k0*sqrt(n1^2 - ne_a^2);
-    r = struct('alpha', a, 'd', d, 'ad', a/1e4*d, 'kdi', abs(imag(kap*d)), ...
-               'ne_t', ne_t, 'ne_a', ne_a, 'nroots', nr, 'found', ok, ...
-               'dn', NaN, 'dalpha', NaN, 'rel', NaN);
-    if ok
-        r.dn     = abs(ne_t - ne_a);
-        r.dalpha = 2*k0*1e4*abs(imag(ne_t) - imag(ne_a));
-        r.rel    = r.dalpha / max(a, eps);
-        % 附加诊断：TMM 根处 |f| 与解析根处 |f|
-        r.res_t  = abs(fh(ne_t));
-        r.res_a  = abs(fh(ne_a));
-        % 附加诊断：连乘矩阵的条件数与边界条件项的"抵消放大倍数"
-        % amp = max(|v2|,|s_cov·v1|)/|f|：真正决定精度的不是 cond(M)，而是这个放大倍数
-        [f_t, aux] = dispersion_tmm(ne_t, L, lambda, 'TE');
-        Mm  = [aux.M(1) aux.M(2); aux.M(3) aux.M(4)];
-        v1  = Mm(1,1) + Mm(1,2)*aux.gam_sub;
-        v2  = Mm(2,1) + Mm(2,2)*aux.gam_sub;
-        r.condM = cond(Mm);
-        r.amp   = max(abs(v2), abs(aux.gam_cov*v1)) / max(abs(f_t), eps);
-    else
-        r.res_t = NaN; r.res_a = abs(fh(ne_a));
-        r.condM = NaN; r.amp = NaN;
-    end
-end
-
-% ───────────────────────────────────────────────────────────────────────────────────
-% 函数：ternary（条件选择字符串）
-% 输入：cond：逻辑; a、b：待选字符串
-% 输出：a（cond 真）或 b
-% ───────────────────────────────────────────────────────────────────────────────────
-function s = ternary(cond, a, b)
-    if cond, s = a; else, s = b; end
-end
-
-% ───────────────────────────────────────────────────────────────────────────────────
-% 函数：stage2_newton_scalar（标量复数牛顿，带阻尼，仅用于 S6 参考解）
-% 输入：fun：标量函数; x0：初值; maxit：最大迭代
-% 输出：x：根
-% 说明：
-%   1.步长上限 0.5、收敛判据 |step| < 1e-14·max(1,|x|)；
-%   2.不收敛时返回最后一次迭代值（S6 只作参考，不静默造根）。
-% ───────────────────────────────────────────────────────────────────────────────────
-function x = stage2_newton_scalar(fun, x0, maxit)
-    x = x0;
-    h = 1e-7;
-    for it = 1:maxit
-        fx = fun(x);
-        df = (fun(x + h) - fun(x - h)) / (2*h);
-        if abs(df) < 1e-300, break; end
-        step = fx / df;
-        if abs(step) > 0.5, step = 0.5*step/abs(step); end
-        x = x - step;
-        if abs(step) < 1e-14*max(1, abs(x)), break; end
-    end
-end
-
-% ───────────────────────────────────────────────────────────────────────────────────
-% 函数：stage2_s7_poly（四阶多项式取值，Horner 形式）
-% 输入：a：5×1 系数（a(1)=a0 … a(5)=a4）; x：自变量
-% 输出：v：多项式值
-% 说明：
-%   1.Table I 的 f(x)=Σ_{n=0..4} a_n x^n，x 取 λ[nm]；
-%   2.用 Horner 形式，避免 x^4 在 680 nm 处的舍入放大。
-% ───────────────────────────────────────────────────────────────────────────────────
-function v = stage2_s7_poly(a, x)
+function v = stage2_poly(a, x)
     v = a(5);
     for k = 4:-1:1
         v = v*x + a(k);
@@ -1962,19 +1677,17 @@ function v = stage2_s7_poly(a, x)
 end
 
 % ───────────────────────────────────────────────────────────────────────────────────
-% 函数：stage2_s7_table1（Kioupakis 2010 Table I 的四阶多项式系数）
+% 函数：Kioupakis 2010 Table I 的四阶多项式系数
 % 输入：无
 % 输出：T：结构体
 %       T.ph/T.de/T.al 各含 e_perp/e_par/h_perp/h_par 五元列向量
 % 说明：
-%   1.来源：Kioupakis, Rinke, Van de Walle, Appl. Phys. Express 3, 082101 (2010),
-%     DOI 10.1143/APEX.3.082101, Table I（380–680 nm，300 K）；
+%   1.DOI 10.1143/APEX.3.082101, Table I(380–680 nm，300 K) (2010)。
 %   2.perp = 光偏振 ⊥ c 轴，par = ∥ c 轴；e/h = 电子/空穴；
-%   3.本模型 TE 模的 E 沿面内 x（⊥ c）⇒ 用 perp 列；TM 模的 E 主要沿 y（∥ c）⇒ 用 par 列；
-%   4.系数按 PDF 排版逐格抄录（out\kioupakis2010_table1*.png 是抄录时的对照图），
-%     抄写正确性由 stage2_s7_selftest 反查 Table II 校验，不靠"看着像"。
+%   3.本模型 TE 模 ⇒ perp; TM 模 ⇒ par；
+%   4.抄写正确性由 test_stage2\test_s7_selftest.m 用原文 Table II 反查校验
 % ───────────────────────────────────────────────────────────────────────────────────
-function T = stage2_s7_table1()
+function T = stage2_KIO_table1()
     T.ph.e_perp = [-2.629e1;  1.999e-1; -5.406e-4;  6.294e-7; -2.673e-10];
     T.ph.e_par  = [-2.858e1;  2.126e-1; -5.670e-4;  6.546e-7; -2.764e-10];
     T.ph.h_perp = [ 5.548;   -5.631e-2;  2.035e-4; -3.060e-7;  1.794e-10];
@@ -1992,54 +1705,59 @@ function T = stage2_s7_table1()
 end
 
 % ───────────────────────────────────────────────────────────────────────────────────
-% 函数：stage2_s7_sigma（自由载流子吸收截面 [cm²]）
-% 输入：lambda：波长 [μm]; pol：'TE'（E⊥c）或 'TM'（E∥c）;
-%       carrier：'e' 或 'h'; xln：该层 In 组分（0 = GaN）
-% 输出：s：σ = 10^-18·[f_el-ph + f_alloy·x(1−x)/(0.25·0.75)] [cm²]
+% 函数：吸收截面计算 [cm²]
+% 输入：lambda：波长 [μm]; pol：'TE'（E⊥c轴）或 'TM'（E∥c轴）;
+%       carrier：多子类型，'e' 或 'h'; xln：该层 In 组分（0 = GaN）
+% 输出：s：吸收截面(σ [cm²])
 % 说明：
-%   1.charged-defect 通道记 0：原文式 (2) 要乘 Z²·n_I/10^18，缺陷密度未知，
-%     且原文结论是该通道比声子辅助弱两个数量级以上——没有 n_I 就不假装知道；
-%   2.alloy 通道按原文式 (3) 用 x(1−x)/[0.25(1−0.25)] 缩放到本层组分。
+%   1.!! 本模型主要考虑声子辅助自由载流子吸收和合金辅助吸收; 未考虑带电缺陷辅助
+%       吸收，记为0，因为缺陷密度未知，且原文结论是该通道比声子辅助弱两个数量级以上。
+%   2.alloy 通道按原文式 (3) 用 x(1−x)/[0.25(1−0.25)]。
 % ───────────────────────────────────────────────────────────────────────────────────
-function s = stage2_s7_sigma(lambda, pol, carrier, xln)
-    T  = stage2_s7_table1();
-    nm = lambda * 1e3;
+function s = stage2_sigma(lambda, pol, carrier, xln)
+    T  = stage2_KIO_table1();
+    lambda_nm = lambda * 1e3;
     if strcmpi(pol, 'TE'), sfx = 'perp'; else, sfx = 'par'; end
     key = sprintf('%s_%s', lower(carrier), sfx);
-    fph = stage2_s7_poly(T.ph.(key), nm);
-    fal = stage2_s7_poly(T.al.(key), nm) * (xln*(1-xln)) / (0.25*0.75);
+    fph = stage2_poly(T.ph.(key), lambda_nm);
+    fal = stage2_poly(T.al.(key), lambda_nm) * (xln*(1-xln)) / (0.25*0.75);
     s   = 1e-18 * (fph + fal);
 end
 
 % ───────────────────────────────────────────────────────────────────────────────────
-% 函数：stage2_s7_alpha_table（各层吸收系数表）
-% 输入：lambda：波长 [μm]; pol; scenario：'min' | 'kio' | 'zero'
+% 函数：各层吸收系数表
+% 输入：lambda：波长 [μm]; pol; scenario：采用的吸收系数定义'min' | 'kio' | 'zero'
 % 输出：M：containers.Map（层名 → α [cm⁻¹]）; 
-%      tab：struct 数组（tag/N/carrier/x/alpha）
+%      tab：struct 数组
+%           tab.tag         层标签
+%           tab.N           载流子浓度
+%           tab.carrier     多子类型
+%           tab.x           合金摩尔分数
+%           tab.alpha       吸收系数
 % 说明：
 %   1.载流子浓度不是阶段 2 能算的量（属阶段 4/5），这里取 Kioupakis 2010 Table II 的量级，
-%     按本结构层名映射：p 侧 3e19 / 1e19 / 2e19，n 侧 2e18，QW 2e19，衬底 0；这是声明过的假设；
-%   2.'min' 场景用施工单给的两个量级值（EBL 36、p 包层 18 cm⁻¹），其余 0；
-%   3.'kio' 场景用 Table I 参数化：α = N·σ(λ,pol,x)。
+%     按本结构层名映射：p 侧 3e19 / 1e19 / 2e19，n 侧 2e18，QW 2e19，衬底 0。
+%   2.&&& 加入新的层名，需额外添加。
+%   3.'min' 场景用施工单给的两个量级值（EBL 36、p 包层 18 cm⁻¹），其余 0；
+%     'kio' 场景用 Table I 参数化：α = N·σ(λ,pol,x)。
 % ───────────────────────────────────────────────────────────────────────────────────
-function [M, tab] = stage2_s7_alpha_table(lambda, pol, scenario)
+function [M, tab] = stage2_alpha_table(lambda, pol, scenario)
     tags = {'substrate','n-clad','n-wave','QW','QW1','barrier','QW2','p-wave','EBL','p-clad'};
-    Nn   = [ 0,          2e18,    2e18,    2e19, 2e19,  2e19,    2e19,  1e19,    2e19,  3e19];
-    car  = {'e','e','e','h','h','h','h','h','h','h'};
-    xln  = [ 0,          0,       0.04,    0.15, 0.15,  0,       0.15,  0.04,    0,     0];
+    Nn   = [ 0,          2e18,    2e18,    2e19, 2e19,  2e19,    2e19,  1e19,    2e19,  3e19];  % 载流子浓度
+    car  = {'e','e','e','h','h','h','h','h','h','h'};                                           % 多子类型
+    xln  = [ 0,          0,       0.04,    0.15, 0.15,  0,       0.15,  0.04,    0,     0];     % In的组分
     al   = zeros(1, numel(tags));
     switch lower(scenario)
         case 'kio'
             for k = 1:numel(tags)
-                al(k) = Nn(k) * stage2_s7_sigma(lambda, pol, car{k}, xln(k));
+                al(k) = Nn(k) * stage2_sigma(lambda, pol, car{k}, xln(k));
             end
         case 'min'
             al(strcmp(tags, 'EBL'))    = 36;
             al(strcmp(tags, 'p-clad')) = 18;
         case 'zero'
-            % 全 0，仅用于取基准 P_layer
         otherwise
-            error('stage2_s7_alpha_table: 未知场景 %s', scenario);
+            error('stage2_alpha_table: 未知场景 %s', scenario);
     end
     M   = containers.Map(tags, num2cell(al));
     tab = struct('tag', tags, 'N', num2cell(Nn), 'carrier', car, ...
@@ -2047,286 +1765,393 @@ function [M, tab] = stage2_s7_alpha_table(lambda, pol, scenario)
 end
 
 % ───────────────────────────────────────────────────────────────────────────────────
-% 函数：stage2_s7_selftest（用 Table II 反查 Table I 系数抄录是否正确）
-% 输入：无
-% 输出：out：结构体
-%       out.含逐层预测/原文对照与最大相对偏差
+% 函数：stage2_solve_api（B 步：参数化解算接口，检验脚本的唯一入口）
+% 输入：opt：结构体，字段全部可选
+%         .lambda  波长 [μm]，默认 0.45
+%         .pol     'TE' / 'TM'，默认 'TE'
+%         .n_modes 求几个模，默认 3
+%         .stack   '7' / '9' / 'test'，默认 '7'
+%         .scenario 'kio' / 'min' / 'zero'，按 Kioupakis 参数化建 α 表
+%         .alpha   显式 α 表：struct（层名→α [cm^-1]）或 containers.Map；给定时优先于 scenario
+%         .thick   层厚覆盖：struct / containers.Map（层名→厚度 [μm]），用于 B5 的厚度扫描
+%         .nsub    衬底折射率实部覆盖 [无量纲]，用于 B6 的衬底扫描；虚部保持原值
+% 说明：thick / nsub 在层结构建好之后改写，再走一遍 build_layers 的断言（层厚必须有限正值）
+% 输出：S：结构体数组，每模一个，字段
+%         ne      复有效折射率
+%         Gamma   限制因子（口径不变，同主流程）
+%         P_layer 逐层功率占比
+%         alpha   逐层吸收系数 [cm^-1]
+%         contrib 逐层贡献 P·α·n_r/Re(ne) [cm^-1]，其和 = α_i
+%         ch      四通道（sub/n/act/p/contact）
+%         ok      该模是否解出：false 时数值字段为 NaN，但 S 仍有 n_modes 个元素
+%      另附 S 之外的标量信息放在每个元素的 lambda/pol/tag 里
+% 调用函数：stage2_alpha_table，stage2_build_stack，stage2_solve_modes，
+%           stage2_alpha_by_tag，stage2_channels
 % 说明：
-%   1.这是"系数抄对了没有"的把手：Table II 给了 Γ_i、N_i、Γ_iα_i，反推 α_i = Γ_iα_i/Γ_i，
-%     再与 N_i·σ 比较；GaN 层应落在百分之几以内；
-%   2.QW 行单独标注：它是 InGaN 且有量子阱态，本文只按合金散射缩放，若偏差大就如实列出，
-%     不当成抄录错误（避免用 QW 的偏差否定其他四行）。
+%   1.全局表 STAGE2_ALPHA 在这里 set / clear，对调用方不再可见（退化为实现细节）；
+%   2.每次调用都重建层结构（坑 H5），所以连续调用不同 α 表不会互相污染；
+%   3.本函数只做"解 + 收集"，不做判定、不打印——判定留给 test_stage2 下的脚本。
 % ───────────────────────────────────────────────────────────────────────────────────
-function out = stage2_s7_selftest()
-    lambda = 0.52;
-    rows = { ...
-        'p-cladding', 0.23, 3e19, 'h', 0.00, 9.5; ...
-        'p-guiding',  0.16, 1e19, 'h', 0.10, 2.9; ...
-        'EBL',        0.03, 2e19, 'h', 0.00, 0.8; ...
-        'QW',         0.03, 2e19, 'h', 0.30, 2.7; ...
-        'n-guiding',  0.19, 2e18, 'e', 0.10, 0.4; ...
-        'n-cladding', 0.27, 2e18, 'e', 0.00, 0.2 };
+function S = stage2_solve_api(opt)
+    global STAGE2_ALPHA
 
-    fprintf('\n===== S7 自校验：Table I 参数化 vs 原文 Table II（520 nm）=====\n');
-    fprintf('%-12s %6s %10s %9s %9s %9s %9s %9s\n', ...
-        '层', 'Γ', 'N[cm^-3]', 'α_原文', 'α_预测', 'Γα_原文', 'Γα_预测', '|ΔΓα|');
-    % 判据说明：Table II 的 Γα 只印到 0.1 cm^-1，末位一位的舍入就有 ±0.05，
-    % 所以"α 的相对偏差"在小 Γα 行会被放大（n-clad 的 Γα=0.2，0.01 的舍入就是 5%）。
-    % 正确的把手是直接比 Γα，容差取半个末位 0.06；QW 行单独列出、不参与判据。
-    dev = [];
-    for k = 1:size(rows, 1)
-        tag = rows{k,1}; G = rows{k,2}; Nc = rows{k,3}; cr = rows{k,4};
-        xl  = rows{k,5}; GA = rows{k,6};
-        a_ref  = GA / G;
-        s      = stage2_s7_sigma(lambda, 'TE', cr, xl);
-        a_pred = Nc * s;
-        dGA    = abs(G*a_pred - GA);
-        if ~strcmp(tag, 'QW'), dev(end+1) = dGA; end   %#ok<AGROW>
-        fprintf('%-12s %6.2f %10.2e %9.2f %9.2f %9.2f %9.2f %9.3f\n', ...
-            tag, G, Nc, a_ref, a_pred, GA, G*a_pred, dGA);
+    % 参数缺省
+    lambda   = 0.45;
+    pol      = 'TE';
+    n_modes  = 3;
+    stack    = '7';
+    scenario = '';
+    alpha    = [];
+    if isfield(opt, 'lambda')   && ~isempty(opt.lambda),   lambda   = opt.lambda;   end
+    if isfield(opt, 'pol')      && ~isempty(opt.pol),      pol      = opt.pol;      end
+    if isfield(opt, 'n_modes')  && ~isempty(opt.n_modes),  n_modes  = opt.n_modes;  end
+    if isfield(opt, 'stack')    && ~isempty(opt.stack),    stack    = opt.stack;    end
+    if isfield(opt, 'scenario') && ~isempty(opt.scenario), scenario = opt.scenario; end
+    if isfield(opt, 'alpha')    && ~isempty(opt.alpha),    alpha    = opt.alpha;    end
+    thick = []; nsub = [];
+    if isfield(opt, 'thick') && ~isempty(opt.thick), thick = opt.thick; end
+    if isfield(opt, 'nsub')  && ~isempty(opt.nsub),  nsub  = opt.nsub;  end
+
+    % α 表：显式给定时优先，否则按场景建
+    if ~isempty(alpha)
+        Mx = alpha;
+        if isstruct(Mx)
+            fn = fieldnames(Mx);
+            Mm = containers.Map();
+            for k = 1:numel(fn)
+                Mm(fn{k}) = Mx.(fn{k});
+            end
+            Mx = Mm;
+        end
+        % 由 α 表反推逐层表（tag/alpha），供 stage2_alpha_by_tag 使用
+        tg = keys(Mx); av = values(Mx);
+        tabx = struct('tag', {}, 'alpha', {});
+        for k = 1:numel(tg)
+            tabx(k) = struct('tag', tg{k}, 'alpha', av{k});
+        end
+    elseif ~isempty(scenario)
+        [Mx, tabx] = stage2_alpha_table(lambda, pol, scenario);
+    else
+        Mx = []; tabx = struct('tag', {}, 'alpha', {});
     end
-    out.max_dga = max(dev);
-    out.pass    = out.max_dga <= 0.06;
-    fprintf('非 QW 行 max|ΔΓα| = %.3f cm^-1（判据 0.06 = 原文一个末位的舍入）⇒ pass=%d\n', ...
-        out.max_dga, out.pass);
+
+    STAGE2_ALPHA = Mx;
+    Lx  = stage2_build_stack(stack, lambda);
+
+    % 层厚覆盖（B5）：按层名查下标，不能按下标给——7 层与 9 层的层序不同
+    if ~isempty(thick)
+        if isstruct(thick)
+            tk0 = fieldnames(thick);
+            tv0 = cellfun(@(k) thick.(k), tk0, 'UniformOutput', false);
+            thick = containers.Map(tk0, tv0);
+        end
+        tk = keys(thick);
+        for k = 1:numel(tk)
+            idx = find(strcmp({Lx.tag}, tk{k}), 1);
+            assert(~isempty(idx), 'stage2_solve_api: thick 里的层名 %s 不在当前结构里', tk{k});
+            Lx(idx).d = thick(tk{k});
+        end
+        Lx = build_layers(Lx);      % 重跑断言：中间层厚度必须有限正值
+    end
+
+    % 衬底折射率覆盖（B6）：只换实部，虚部（吸收）保持不动
+    if ~isempty(nsub)
+        Lx(1).n = complex(nsub, imag(Lx(1).n));
+        Lx = build_layers(Lx);
+    end
+    Sx  = stage2_solve_modes(Lx, lambda, pol, n_modes, opt);
+    alx = stage2_alpha_by_tag(Lx, tabx);
+    nrx = real([Lx.n]);
+    STAGE2_ALPHA = [];
+
+    S = struct('ne', {}, 'Gamma', {}, 'P_layer', {}, 'alpha', {}, ...
+               'contrib', {}, 'ch', {}, 'ok', {}, 'lambda', {}, 'pol', {}, 'tag', {});
+
+    % 求根失败（例如衬底折射率越过 Re(n_eff) 后窗口内无根）：仍返回 n_modes 个元素，
+    % 只把 ok 置 false、数值置 NaN——调用方不必先判断"数组是不是空的"。
+    if isempty(Sx)
+        for j = 1:n_modes
+            S(j) = struct('ne', complex(NaN, NaN), 'Gamma', NaN, ...
+                          'P_layer', nan(1, numel(Lx)), 'alpha', alx, ...
+                          'contrib', nan(1, numel(Lx)), ...
+                          'ch', stage2_channels([], {Lx.tag}), 'ok', false, ...
+                          'lambda', lambda, 'pol', pol, 'tag', {{Lx.tag}});
+        end
+        return
+    end
+    % 注意：'tag' 存的是 cell（层名表），必须用双层花括号包住，
+    % 否则 struct(...) 会按 cell 的元素个数展开成 1×N 的结构体数组（D1 同类）。
+    for j = 1:numel(Sx)
+        one = struct('ne', Sx(j).ne, 'Gamma', Sx(j).G, 'P_layer', Sx(j).Pl, ...
+                     'alpha', alx, 'contrib', nan(1, numel(Lx)), ...
+                     'ch', stage2_channels([], {Lx.tag}), 'ok', Sx(j).ok, ...
+                     'lambda', lambda, 'pol', pol, 'tag', {{Lx.tag}});
+        if Sx(j).ok
+            Pl = Sx(j).Pl(:).';
+            one.contrib = Pl .* alx .* nrx / real(Sx(j).ne);
+            one.ch      = stage2_channels(one.contrib, {Lx.tag});
+        end
+        S(j) = one;
+    end
 end
 
 % ───────────────────────────────────────────────────────────────────────────────────
-% 函数：stage2_s7_solve（给定层结构解 TE0，返回 n_eff/Γ/P_layer）
-% 输入：L：层结构; lambda; pol; opts
-% 输出：ne, G, Pl, ck, ok：ok=false 表示没找到根（不抛异常，交给调用方记 NaN）
-% 调用函数：stage2_empty_check [用于数据记录 (→ 后验检查) 的空数组]
+% 函数：stage2_sigma_api（'sigma' 动作：返回某一层吸收截面 σ [cm^2]）
+% 输入：opt：结构体，字段全部可选
+%         .lambda  波长 [μm]，默认 0.45
+%         .pol     'TE'（E⊥c）/'TM'（E∥c），默认 'TE'
+%         .carrier 'e' / 'h'，默认 'h'
+%         .x       该层 In 组分（0 = GaN），默认 0
+% 输出：c：结构体，字段 lambda/pol/carrier/x/elph/alloy/total，单位 cm^2
+% 调用函数：stage2_sigma
 % 说明：
-%   1.搜根窗口每次按当前 L 重算——扫厚度/扫衬底折射率时窗口会变；
-%   2.n_lo 用 max(衬底, 覆盖层) + tiny，n_hi 用 max(n) − tiny（与主函数同口径）。
+%   1.这是模型自己的吸收模型出口，不是判定逻辑：判定（例如用原文 Table II 反查系数
+%     抄录是否正确）写在 test_stage2 的脚本里；
+%   2.defect 通道恒为 0（缺陷密度未知，见 stage2_sigma 的说明），故不单列。
 % ───────────────────────────────────────────────────────────────────────────────────
-function [ne, G, Pl, ck, ok] = stage2_s7_solve(L, lambda, pol, opts)
-    ne = NaN; G = NaN; Pl = []; ck = stage2_empty_check(); ok = false;
-    N  = numel(L);
+function c = stage2_sigma_api(opt)
+    lambda = 0.45; pol = 'TE'; carrier = 'h'; x = 0;
+    if isfield(opt, 'lambda')  && ~isempty(opt.lambda),  lambda  = opt.lambda;  end
+    if isfield(opt, 'pol')     && ~isempty(opt.pol),     pol     = opt.pol;     end
+    if isfield(opt, 'carrier') && ~isempty(opt.carrier), carrier = opt.carrier; end
+    if isfield(opt, 'x')       && ~isempty(opt.x),       x       = opt.x;       end
+
+    T  = stage2_KIO_table1();
+    nm = lambda * 1e3;
+    if strcmpi(pol, 'TE'), sfx = 'perp'; else, sfx = 'par'; end
+    key = sprintf('%s_%s', lower(carrier), sfx);
+    elph  = 1e-18 * stage2_poly(T.ph.(key), nm);
+    alloy = 1e-18 * stage2_poly(T.al.(key), nm) * (x*(1-x)) / (0.25*0.75);
+    c = struct('lambda', lambda, 'pol', pol, 'carrier', carrier, 'x', x, ...
+               'elph', elph, 'alloy', alloy, 'total', elph + alloy);
+end
+
+% ───────────────────────────────────────────────────────────────────────────────────
+% 函数：根据已选预设结构(按名字)重建层结构
+% 输入：name：'7' / '9' / 'test'; lambda：波长 [μm]
+% 输出：L：build_layers 校验后的层结构（折射率已按 alpha_of_layer 带虚部）
+% 调用函数：stack_7layer，stack_9layer_mqw，test_layer，
+%          build_layers(校验层结构)
+% 说明：
+%   1.损耗重解时换的是全局表 STAGE2_ALPHA，必须重建层结构(即在求解中引入STAGE2_ALPHA);
+%   2.&&& 堆栈选择与主函数 use9 / usetest 同源，避免两处判断各写一遍。(还没看明白)
+% ───────────────────────────────────────────────────────────────────────────────────
+function L = stage2_build_stack(name, lambda)
+    switch name
+        case '9'
+            lay = stack_9layer_mqw(lambda);
+        case 'test'
+            lay = test_layer(lambda);
+        otherwise
+            lay = stack_7layer(lambda);
+    end
+    L = build_layers(lay);
+end
+
+% ───────────────────────────────────────────────────────────────────────────────────
+% 函数：stage2_alpha_by_tag（把 α 表按层名对齐到层结构）
+% 输入：L：层结构; tab：stage2_alpha_table 的逐层表（字段 tag/alpha）
+% 输出：a：1×N 的逐层吸收系数 [cm^-1]
+% 说明：
+%   1.α 表按 10 个可能层名建，层结构只含其中 7 或 9 个 ⇒ 必须按名字查，不能用下标。
+%   2.查不到（层不在表里）置 0，并在调用处由 ΣP·α 与 α_i 的比对暴露出来。
+% ───────────────────────────────────────────────────────────────────────────────────
+function a = stage2_alpha_by_tag(L, tab)
+    a = zeros(1, numel(L));
+    for k = 1:numel(L)
+        idx = find(strcmp({tab.tag}, L(k).tag), 1);
+        if ~isempty(idx)
+            a(k) = tab(idx).alpha;
+        end
+    end
+end
+
+% ───────────────────────────────────────────────────────────────────────────────────
+% 函数：将层损耗总结为四通道(衬底，n侧，有源区，p侧，其他(contact))
+% 输入：aj：逐层贡献 P_j·α_j·n_rj/Re(n_eff) [cm^-1]; tags：层名 cell
+% 输出：ch：结构体，字段 sub/n/act/p/contact，单位 cm^-1
+% 说明：
+%   1.通道口径与主输出的损耗分解一致：n 侧 = n-clad + n-wave；
+%     p 侧 = p-wave + EBL + p-clad；有源区 = 全部 is_active 层并集；
+%     衬底单列（它既不是包层也不是有源区）；其余归 contact（本结构为空）。
+%   2.有源区把 barrier 也算进来，是为了让四通道之和 = α_i；
+%     Γ 的口径不受影响（Γ 仍不含势垒，见 confinement_factor）。
+% ───────────────────────────────────────────────────────────────────────────────────
+function ch = stage2_channels(aj, tags)
+    ch = struct('sub', 0, 'n', 0, 'act', 0, 'p', 0, 'contact', 0);
+    if isempty(aj)
+        return
+    end
+    is_sub = strcmp(tags, 'substrate');
+    is_n   = ismember(tags, {'n-clad', 'n-wave'});
+    is_act = ismember(tags, {'QW', 'QW1', 'barrier', 'QW2'});
+    is_p   = ismember(tags, {'p-wave', 'EBL', 'p-clad'});
+    is_oth = ~(is_sub | is_n | is_act | is_p);
+    ch.sub     = sum(aj(is_sub));
+    ch.n       = sum(aj(is_n));
+    ch.act     = sum(aj(is_act));
+    ch.p       = sum(aj(is_p));
+    ch.contact = sum(aj(is_oth));
+end
+
+% ───────────────────────────────────────────────────────────────────────────────────
+% 函数：复折射率层结构模式求解
+% 输入：L：层结构（折射率含虚部）; lambda; pol; n_modes：待求解模式数; opts
+% 输出：S：结构体数组
+%       S.ne    按实部降序的根(模式)    
+%       S.G     限制因子
+%       S.Pl    各层的功率
+%       S.ck    用于复折射率求解时记录数据的空数组
+%       S.ok    ok=false 表示该模没解出来
+% 调用函数：find_roots_complex(求解色散零点)，mode_profile(模场重建)，
+%          normalize_mode(模场归一化)，confinement_factor(求解限制因子)
+% 说明：
+%   1.与主流程同一套口径：按 有效折射率实部 降序排；
+%   2.&&& Γ 与 P_layer 复用主流程函数，不另立算法；
+%   3.窗口与主流程一致（n_lo 取两侧包层较高者），因此"窗口内无根"的含义也一致；
+%   4.单个模失败不抛异常，只把 ok 置 false，由调用方决定怎么报。
+%   5.&&& ck是干什么用的？
+% ───────────────────────────────────────────────────────────────────────────────────
+function S = stage2_solve_modes(L, lambda, pol, n_modes, opts)
+    S = struct('ne', {}, 'G', {}, 'Pl', {}, 'ck', {}, 'ok', {});
+    N     = numel(L);
     n_max = max(real([L.n]));
     tiny  = 1e-9 * max(1, n_max);
     n_lo  = max(real(L(1).n), real(L(N).n)) + tiny;
     n_hi  = n_max - tiny;
-    if ~(n_hi > n_lo), return; end
+    if ~(n_hi > n_lo)
+        return
+    end
+    yb = layer_bounds(L);
     fh = @(x) dispersion_tmm(x, L, lambda, pol);
-    try
-        [ne, G, Pl, ck] = stage2_s5_solve_te0(fh, L, lambda, pol, opts, layer_bounds(L), n_lo, n_hi);
-        ok = true;
-    catch
-        ok = false;
+    roots_n = find_roots_complex(fh, n_lo, n_hi, n_modes + 2, opts);
+    if isempty(roots_n)
+        return
+    end
+    % 按实部降序、截断
+    [~, ord] = sort(real(roots_n(:).'), 'descend');
+    roots_n  = roots_n(ord);
+    if numel(roots_n) > n_modes
+        roots_n = roots_n(1:n_modes);
+    end
+
+    for j = 1:numel(roots_n)
+        s = struct('ne', roots_n(j), 'G', NaN, 'Pl', nan(1, N), ...
+                   'ck', stage2_empty_check(), 'ok', false);
+        try
+            [y, E, n_y] = mode_profile(roots_n(j), L, lambda, pol, opts);
+            [E, ~]      = normalize_mode(y, E, n_y, pol);
+            [G, det]    = confinement_factor(y, E, n_y, yb, L, pol);
+            s.G  = G;
+            s.Pl = det.P_layer;
+            s.ok = true;
+        catch
+            s.ok = false;
+        end
+        S(j) = s;
     end
 end
 
+
 % ───────────────────────────────────────────────────────────────────────────────────
-% 函数：stage2_s7_channels（S7：四通道分解 + 厚度扫描 + 衬底折射率扫描）
-% 输入：无（波长走 stage2_lambda）
-% 输出：out：结构体
-%       out.含分解表、扫描表与判据值
-% 调用函数：stack_7layer，layer_bounds，stage2_s7_alpha_table，stage2_s7_solve
+% 函数：draw_loss3d（按两个下拉框的状态重画三维方块与堆叠条）
+% 输入：fig：图窗句柄（其 UserData 存 modes / tag / d / 下拉框与 axes 句柄）
+% 输出：无（就地重画）
+% 调用函数：box3
 % 说明：
-%   1.四通道：n 侧（substrate+n-clad+n-wave）/ 有源区（QW）/ p 侧（p-wave+EBL+p-clad）/ 接触金属（本结构无）；
-%   2.分解给两种口径：字面 ΣP_jα_j 与严格 ΣP_jα_j·n_rj/Re(n_eff)（S5 结论）；
-%   3.厚度扫描：n-wave 与 p-wave 同步加厚，看 α_i(t) 与 Γ(t) 的折衷（B5）；
-%   4.衬底扫描：n_sub 从低于包层扫到高于包层，判 n_eff 是否越过 n_sub（B6）。
+%   1.上格：方块高度 = 该层贡献 P_j·α_j·n_rj/Re(n_eff)，沿 z 累加，总高即 α_i；
+%   2.下格：同一场景下所有模式的堆叠条，便于横向比 α_i；条顶标数值；
+%   3.所有方块深度相同（只给立体感），不做厚度映射——三维图里按厚度画会让
+%     QW（9 nm）与包层（1.2 μm）差 130 倍，QW 会压成一条线；
+%   4.层名与数值放在右侧清单（annotation）：用数据坐标写会在 axes 边界被裁掉，
+%     零贡献的层也照样列出，否则 MIN 场景看起来"少了几层"；
+%   5.注意 sprintf 里要写 \alpha：单个 a 会被转成响铃字符（坑 H11）。
 % ───────────────────────────────────────────────────────────────────────────────────
-function out = stage2_s7_channels(lambda)
-    % 函数：stage2_s7_channels（S7 四通道损耗分解 + 厚度扫描 + 衬底扫描）
-    % 输入：lambda：波长 [μm]；省略时取 stage2_lambda()
-    % 输出：out：decomp（各场景 α_mode/通道/P/α）、thick（厚度扫描）、
-    %       substrate（衬底扫描）、nsub_th（束缚模截止的 n_sub）
-    % 说明：
-    %   场景 min = EBL 36 + p-clad 18 cm^-1（其余 0）；kio = Kioupakis 2010 Table I 参数化。
-    %   注：n_of_lambda 目前不随 λ 色散（405/520 无可靠来源），随 λ 变的只有 k0 与 α。
-    global STAGE2_ALPHA
-    if nargin < 1 || isempty(lambda), lambda = stage2_lambda(); end
-    k0     = 2*pi/lambda;
-    pol    = 'TE';
-    opts   = struct('num_scan', 2e4, 'tol', 1e-13, 'maxit', 200, 'merge', 1e-6, ...
-                    'npts', 800, 'tail_dec', 20, 'tail_max', 50, 'num_ff', 2001, ...
-                    'chk_ratio', 0.5, 'chk_h', 10.^-(3:8));
+function draw_loss3d(fig)
+    S  = fig.UserData;
+    im = get(S.pmMode, 'Value');
+    is = get(S.pmScen, 'Value');
+    ax = S.ax;   axb = S.axb;
+    Nl = numel(S.tag);
+    cmap = parula(Nl);
+    sc   = S.scen{is};
 
-    % ── 基准：零吸收 ──
-    STAGE2_ALPHA = [];
-    L0 = stack_7layer(lambda);
-    [ne0, G0, P0, ck0, ok0] = stage2_s7_solve(L0, lambda, pol, opts);
-    assert(ok0, 'stage2_s7_channels: 基准未找到根');
-    nr0  = real(ne0);
-    tags = {L0.tag};
-
-    fprintf('\n===== S7 基准（无吸收，%.0f nm，TE0）=====\n', lambda*1000);
-    fprintf('Re(n_eff)=%.12f  Γ=%.9f  ΣP−1=%.2e  根后验 max ratio=%.2e\n', ...
-        nr0, G0, sum(P0)-1, max([ck0.ratio]));
-
-    scen = {'min', 'kio'};
-    out.decomp = struct([]);
-    for is = 1:numel(scen)
-        [M, tab] = stage2_s7_alpha_table(lambda, pol, scen{is});
-        STAGE2_ALPHA = M;
-        L  = stack_7layer(lambda);                    % 改 α 后必须重建层结构（S5 教训）
-        [ne, ~, Pl, ck, ok] = stage2_s7_solve(L, lambda, pol, opts);
-        if ~ok, fprintf('场景 %s 未找到根\n', scen{is}); continue; end
-        am    = 2*k0*imag(ne)*1e4;
-        al    = cell2mat(values(M, tags));
-        nr    = real(cellfun(@(t) n450_of_tag(t), tags));
-        naive = sum(Pl .* al);
-        stric = sum(Pl .* al .* nr) / real(ne);
-
-        fprintf('\n===== S7 四通道分解：场景 %s =====\n', upper(scen{is}));
-        fprintf('%-10s %8s %10s %10s %10s %8s\n', '层', 'P[%]', 'N[cm^-3]', 'α[cm^-1]', 'P·α', 'n_r/n_eff');
-        % F7 修正：tab 是 10 层的全表，tags 是当前结构的子集（7 层没有 QW1/barrier/QW2），
-        % 直接取 tab(j) 会错行（p-wave 会显示成 QW 的 N、p-clad 显示成 EBL 的 N）。
-        % 必须按层名回查下标。
-        for j = 1:numel(tags)
-            kt = find(strcmp({tab.tag}, tags{j}), 1);
-            fprintf('%-10s %8.4f %10.2e %10.3f %10.4f %8.4f\n', ...
-                tags{j}, 100*Pl(j), tab(kt).N, al(j), Pl(j)*al(j), nr(j)/real(ne));
+    % 上格：三维方块
+    cla(ax); hold(ax, 'on'); box(ax, 'on');
+    M  = S.modes(im).loss.(sc);
+    aj = M.aj;
+    dep = 0.35;  z0 = 0;
+    for k = 1:Nl
+        z1 = z0 + aj(k);
+        if aj(k) > 0
+            box3(ax, 0, 1, 0, dep, z0, z1, cmap(k, :));
         end
-        ch = struct('nside', 0, 'active', 0, 'pside', 0, 'contact', 0);
-        ch.nside   = sum(Pl(ismember(tags, {'substrate','n-clad','n-wave'})) .* ...
-                         al(ismember(tags, {'substrate','n-clad','n-wave'})));
-        ch.active  = sum(Pl(strcmp(tags,'QW')) .* al(strcmp(tags,'QW')));
-        ch.pside   = sum(Pl(ismember(tags, {'p-wave','EBL','p-clad'})) .* ...
-                         al(ismember(tags, {'p-wave','EBL','p-clad'})));
-        fprintf('通道：n 侧 %.4f / 有源区 %.4f / p 侧 %.4f / 接触 %.4f  [cm^-1]\n', ...
-            ch.nside, ch.active, ch.pside, ch.contact);
-        fprintf('α_mode(解) = %.6f   字面 ΣP·α = %.6f（偏差 %.2e）   严格 ΣP·α·n_r/n = %.6f（偏差 %.2e）\n', ...
-            am, naive, abs(am/naive-1), stric, abs(am/stric-1));
-        out.decomp(is).scenario = scen{is};
-        out.decomp(is).alpha_mode = am;
-        out.decomp(is).naive = naive;
-        out.decomp(is).strict = stric;
-        out.decomp(is).channels = ch;
-        out.decomp(is).P = Pl;
-        out.decomp(is).alpha = al;
+        z0 = z1;
     end
+    xlim(ax, [0 1.35]); ylim(ax, [0 0.45]); zlim(ax, [0 max(z0, 1e-6)*1.12]);
+    view(ax, [-40 24]);
+    set(ax, 'XTick', [], 'YTick', []);
+    zlabel(ax, 'P_j\alpha_j n_{r,j}/n_{eff}  [cm^{-1}]');
+    xlabel(ax, 'schematic depth (not to scale)');
+    title(ax, sprintf('%s%d   %s   \\alpha_i = %.3f cm^{-1}', ...
+                      S.pol, im-1, S.sn{is}, M.ai));
 
-    % ── B5：厚度扫描（n-wave 与 p-wave 同步加厚），场景用 kio ──
-    [M, ~] = stage2_s7_alpha_table(lambda, pol, 'kio');
-    STAGE2_ALPHA = M;
-    tlist = [0.04 0.06 0.08 0.10 0.12 0.15 0.18 0.22 0.26 0.30];
-    sc = struct('t', {}, 'ne', {}, 'G', {}, 'am', {}, 'Gm500', {}, 'Gm1000', {});
-    fprintf('\n===== B5 厚度扫描（n-wave = p-wave = t，场景 kio）=====\n');
-    fprintf('%6s %14s %10s %12s %12s %12s\n', 't[μm]', 'Re(n_eff)', 'Γ', 'α_i[cm^-1]', 'Γ·500−α', 'Γ·1000−α');
-    for it = 1:numel(tlist)
-        STAGE2_ALPHA = M;
-        L = stack_7layer(lambda);
-        L(3).d = tlist(it);  L(5).d = tlist(it);
-        [ne, G, ~, ~, ok] = stage2_s7_solve(L, lambda, pol, opts);
-        if ~ok
-            fprintf('%6.2f %14s %10s %12s\n', tlist(it), 'nofind', '-', '-');
-            continue;
-        end
-        am = 2*k0*imag(ne)*1e4;
-        sc(it).t = tlist(it); sc(it).ne = real(ne); sc(it).G = G; sc(it).am = am;
-        sc(it).Gm500  = G*500  - am;
-        sc(it).Gm1000 = G*1000 - am;
-        fprintf('%6.2f %14.9f %10.6f %12.4f %12.2f %12.2f\n', ...
-            tlist(it), real(ne), G, am, sc(it).Gm500, sc(it).Gm1000);
+    % 下格：同一场景下所有模式的堆叠条
+    cla(axb); hold(axb, 'on'); grid(axb, 'on'); box(axb, 'on');
+    nm = numel(S.modes);
+    Y  = zeros(nm, Nl);
+    for j = 1:nm
+        Y(j, :) = S.modes(j).loss.(sc).aj;
     end
-    out.thick = sc;
+    hb = bar(axb, Y, 'stacked');
+    for k = 1:Nl
+        hb(k).FaceColor = cmap(k, :); hb(k).EdgeColor = 'none';
+    end
+    set(axb, 'XTick', 1:nm, 'XTickLabel', ...
+        arrayfun(@(j) sprintf('%s%d', S.pol, j-1), 1:nm, 'UniformOutput', false));
+    ylabel(axb, 'P_j\alpha_j n_{r,j}/n_{eff}  [cm^{-1}]');
+    title(axb, sprintf('Loss decomposition   (all modes, %s;  bar height = \\alpha_i)', ...
+                       S.sn{is}));
+    ylim(axb, [0, 1.18*max(sum(Y, 2))]);
+    for j = 1:nm
+        text(axb, j, sum(Y(j, :)) + 0.03*max(Y(:)), ...
+             sprintf('%.2f', S.modes(j).loss.(sc).ai), ...
+             'HorizontalAlignment', 'center', 'FontSize', 8);
+    end
+    legend(axb, S.tag, 'Location', 'eastoutside', 'FontSize', 8);
+    hold(axb, 'off');
 
-    % ── B6：衬底折射率扫描 ──
-    % 分两段：粗扫看趋势（0.02 步长），细扫定位"根消失"的那一格（0.002 步长）。
-    % 注意：n_sub 一旦超过 Re(n_eff)，束缚模在实轴上就不存在了，本实现的搜索下界
-    % n_lo=max(n_sub,n_clad) 会把根挤出窗口——这时的"无根"是窗口构造的结果，
-    % 不能读成"模消失了"。真正的泄漏模要求复平面分支/PML，归阶段 3。
-    nsub = [1.70:0.05:2.40, 2.400:0.002:2.440];
-    ss = struct('nsub', {}, 'ne', {}, 'bound', {}, 'note', {});
-    fprintf('\n===== B6 衬底折射率扫描（其余层不变，场景 kio）=====\n');
-    fprintf('%7s %14s %8s %10s\n', 'n_sub', 'Re(n_eff)', '束缚?', '备注');
-    for k = 1:numel(nsub)
-        STAGE2_ALPHA = M;
-        L = stack_7layer(lambda);
-        L(1).n = complex(nsub(k), 0);
-        [ne, ~, ~, ~, ok] = stage2_s7_solve(L, lambda, pol, opts);
-        bound = false; note = '';
-        if ok
-            bound = real(ne) > nsub(k);
-            if ~bound, note = 'n_eff<n_sub：衬底内为振荡解'; end
-        else
-            note = '窗口内无根';
-        end
-        ss(k).nsub = nsub(k); ss(k).ne = real(ne); ss(k).bound = bound; ss(k).note = note;
-        fprintf('%7.3f %14.9f %8d %10s\n', nsub(k), real(ne), bound, note);
-    end
-    nb = find([ss.bound], 1, 'last');
-    if isempty(nb)
-        fprintf('阈值：扫描区间内未找到束缚根\n');
-    else
-        fprintf('阈值：n_sub 到 %.3f 仍是束缚模（Re(n_eff)=%.9f）', ...
-            ss(nb).nsub, ss(nb).ne);
-        if nb < numel(ss)
-            fprintf('；%.3f 起窗口内无根 ⇒ 束缚模截止\n', ss(nb+1).nsub);
-        else
-            fprintf('；扫描区间内未截止\n');
-        end
-    end
-    out.substrate = ss;
-    out.nsub_th = ss(nb).nsub;
-    STAGE2_ALPHA = [];
-    STAGE2_ALPHA = [];
+    % 右侧清单：逐层数值（零贡献层也列出）
+    txt = [{'layer           cm^-1'}, ...
+           arrayfun(@(k) sprintf('%-11s %7.3f', S.tag{k}, aj(k)), Nl:-1:1, ...
+                    'UniformOutput', false), ...
+           {'', sprintf('alpha_i      %7.3f', M.ai)}];
+    delete(findall(fig, 'Tag', 'loss3d_list'));
+    annotation(fig, 'textbox', [0.665 0.715 0.27 0.21], 'String', txt, ...
+               'FontName', 'FixedWidth', 'FontSize', 9, 'EdgeColor', [0.75 0.75 0.75], ...
+               'Tag', 'loss3d_list', 'Interpreter', 'none', 'FitBoxToText', 'off');
+    hold(ax, 'off');
 end
 
-
-
-% ─────────────────────────────────────────────────────
-% 函数：stage2_s8_three_lambda（同结构 405/450/520 nm 对比，只读趋势）
-% 输入：无（波长表写死在函数体内）
-% 输出：out(i)：lambda / ne / G / alpha(每层) / Pl / am / ch(通道)
-% 调用函数：stage2_s7_alpha_table、stage2_s7_solve、stack_7layer、n450_of_tag
+% ───────────────────────────────────────────────────────────────────────────────────
+% 函数：box3（画一个三维长方体，五个面 + 十二条棱）
+% 输入：ax：坐标轴; x0/x1/y0/y1/z0/z1：范围; c：面色 [r g b]
+% 输出：无
 % 说明：
-%   1) n(λ) 目前固定为 450 nm 的常数（405/520 无可靠色散来源），随 λ 变的只有
-%      k0 与 Kioupakis Table I 给出的 α(λ)，所以 P_layer/Γ 的变化只来自 k0。
-%   2) 因此 405/520 只能读趋势，不能当绝对 α_i 报出去（施工单 B8 纪律）。
-% ─────────────────────────────────────────────────────
-function out = stage2_s8_three_lambda()
-    global STAGE2_ALPHA
-    pol  = 'TE';
-    opts = struct('num_scan', 2e4, 'tol', 1e-13, 'maxit', 200, 'merge', 1e-6, ...
-                  'npts', 800, 'tail_dec', 20, 'tail_max', 50, 'num_ff', 2001, ...
-                  'chk_ratio', 0.5, 'chk_h', 10.^-(3:8));
-    lams = [0.405 0.450 0.520];
-    tags = {'substrate','n-clad','n-wave','QW','p-wave','EBL','p-clad'};
-
-    fprintf('\n===== S8 三波长对比（同结构，TE0）=====\n');
-    fprintf('说明：n(λ) 固定为 450 nm 常数（405/520 无可靠色散来源）；α 用 Kioupakis Table I（380–680 nm）。\n');
-    fprintf('      结论只作趋势，405/520 的绝对 α_i 不得外报。\n');
-
-    out = struct('lambda', {}, 'ne', {}, 'G', {}, 'alpha', {}, 'Pl', {}, 'am', {}, 'ch', {});
-    for i = 1:numel(lams)
-        lam = lams(i);
-        k0  = 2*pi/lam;
-        [M, ~] = stage2_s7_alpha_table(lam, pol, 'kio');
-        STAGE2_ALPHA = M;
-        L = stack_7layer(lam);
-        [ne, G, Pl, ~, ok] = stage2_s7_solve(L, lam, pol, opts);
-        if ~ok
-            fprintf('λ=%.0f nm：窗口内无根，跳过\n', lam*1000);
-            continue
-        end
-        al    = cell2mat(values(M, tags));
-        nr    = real(cellfun(@(t) n450_of_tag(t), tags));
-        am    = 2*k0*imag(ne)*1e4;
-        stric = sum(Pl .* al .* nr) / real(ne);
-
-        ch = struct('nside', 0, 'active', 0, 'pside', 0);
-        ch.nside  = sum(Pl(ismember(tags, {'substrate','n-clad','n-wave'})) .* ...
-                        al(ismember(tags, {'substrate','n-clad','n-wave'})));
-        ch.active = sum(Pl(strcmp(tags, 'QW')) .* al(strcmp(tags, 'QW')));
-        ch.pside  = sum(Pl(ismember(tags, {'p-wave','EBL','p-clad'})) .* ...
-                        al(ismember(tags, {'p-wave','EBL','p-clad'})));
-
-        out(i).lambda = lam; out(i).ne = ne; out(i).G = G;
-        out(i).alpha = al;  out(i).Pl = Pl; out(i).am = am; out(i).ch = ch;
-
-        fprintf('\nλ=%3.0f nm  Re(n_eff)=%.9f  Γ=%.6f  α_mode=%.4f cm^-1（严格 %.4f，偏 %.1e）\n', ...
-            lam*1000, real(ne), G, am, stric, abs(am/stric - 1));
-        fprintf('  通道：n 侧 %.4f / 有源区 %.4f / p 侧 %.4f  [cm^-1]\n', ...
-            ch.nside, ch.active, ch.pside);
-        for j = 1:numel(tags)
-            fprintf('    %-10s P=%8.4f%%   α=%9.3f cm^-1   P·α=%8.4f\n', ...
-                tags{j}, 100*Pl(j), al(j), Pl(j)*al(j));
-        end
+%   1.顶点按"下四点上四点"排列，面取 +x、+y、顶面、-x、-y 五个，不画底面；
+%     底面朝下，视角在上方永远看不到，画了反而与下一块方块的顶面共面（z-fighting）；
+%   2.十二条棱逐条用 plot3 画出：patch 只画它自己的五个面框，缺的棱会让方块
+%     看起来像"没关上的抽屉"（用户 2026-10-22 指出）；远处的棱由深度缓冲遮挡。
+% ───────────────────────────────────────────────────────────────────────────────────
+function box3(ax, x0, x1, y0, y1, z0, z1, c)
+    V = [x0 y0 z0; x1 y0 z0; x1 y1 z0; x0 y1 z0; ...
+         x0 y0 z1; x1 y0 z1; x1 y1 z1; x0 y1 z1];
+    F = [2 6 7 3; 3 7 8 4; 5 6 7 8; 1 5 8 4; 1 2 6 5];
+    patch(ax, 'Vertices', V, 'Faces', F, 'FaceColor', c, ...
+          'EdgeColor', [0.25 0.25 0.25], 'LineWidth', 0.5);
+    E = [1 2; 2 3; 3 4; 4 1; 5 6; 6 7; 7 8; 8 5; 1 5; 2 6; 3 7; 4 8];
+    for ie = 1:size(E, 1)
+        plot3(ax, V(E(ie, :), 1), V(E(ie, :), 2), V(E(ie, :), 3), '-', ...
+              'Color', [0.25 0.25 0.25], 'LineWidth', 0.5);
     end
-    STAGE2_ALPHA = [];
 end
