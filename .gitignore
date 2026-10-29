@@ -26,3 +26,6 @@ Thumbs.db
 
 # DSH 会话与记忆数据（只留本地，不进仓库）
 .dsh/
+_tmp/
+
+out/
